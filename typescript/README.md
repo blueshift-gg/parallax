@@ -2,10 +2,13 @@
 
 The TypeScript half of [Parallax](https://github.com/blueshift-gg/parallax), a
 fixture-based testing harness for Solana programs on LiteSVM. It is the Kit and
-Web3.js sibling of the Rust crate: both expose the same test model — an isolated
-`Test` world, composable fixtures, and structured outcomes — over the same
-LiteSVM engine, so a program can be exercised from three vantage points (Rust,
-Kit, Web3.js) that must agree.
+Web3.js sibling of the Rust crate, and a thin shell over the same Rust core:
+every harness semantic — fixture placement, deterministic addresses, backfill,
+the fee model, account-change tracking, and error mapping — lives in the
+`parallax-svm-ffi` native kernel, reached through a small binary wire format.
+The shell only converts Kit/Web3.js types to and from that wire, so a program is
+exercised from three vantage points (Rust, Kit, Web3.js) that agree by
+construction.
 
 ```bash
 npm install --save-dev parallax-svm @solana/kit
@@ -57,5 +60,17 @@ or `Test.load` option to set the same per-transaction ceiling as Rust's
 `Test.load(PROGRAM_ADDRESS)` reads `PARALLAX_PROGRAM_PATH`, the same environment
 variable the Rust harness uses to locate a freshly built program. Passing the
 ELF path explicitly keeps direct test-runner invocation straightforward.
+
+## Native library
+
+The shell loads the `parallax-svm-ffi` shared library, resolved in this order:
+
+1. `PARALLAX_SVM_LIB`, if set, as an explicit path to the shared library.
+2. The platform package for your OS and architecture
+   (`parallax-svm-darwin-arm64`, `parallax-svm-linux-x64-gnu`, and so on),
+   installed automatically as an optional dependency.
+3. The repo-local build at `../target/release/libparallax_svm_ffi.*`, so
+   `cargo build --release -p parallax-svm-ffi` from the repository root enables
+   local development against an unpublished kernel.
 
 Licensed under either of Apache-2.0 or MIT at your option.

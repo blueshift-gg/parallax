@@ -26,23 +26,16 @@ import {
   type WalletOptions as SharedWalletOptions,
 } from "./internal/fixture.js";
 import {
-  LiteSvmRuntime,
-  type LiteSvmConverters,
-} from "./internal/litesvm.js";
-import {
   Outcome as SharedOutcome,
   type AccountChange as SharedAccountChange,
   type AccountCodec as SharedAccountCodec,
 } from "./internal/outcome.js";
 import {
-  mintAccountData,
   SPL_ASSOCIATED_TOKEN_PROGRAM_ID,
   SPL_TOKEN_2022_PROGRAM_ID,
   SPL_TOKEN_PROGRAM_ID,
-  systemAccountData,
-  tokenAccountData,
-  type RawAccount,
-} from "./internal/spl.js";
+  SYSTEM_PROGRAM_ID,
+} from "./internal/programs.js";
 import {
   TestCore,
   type HarnessAdapter,
@@ -81,104 +74,46 @@ export function addressesEqual(left: Address, right: Address): boolean {
 }
 
 const addressEncoder = getAddressEncoder();
-const systemProgram = address("11111111111111111111111111111111");
-
-function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
-  return (
-    left.length === right.length &&
-    left.every((byte, index) => byte === right[index])
-  );
-}
+const addressDecoder = getAddressDecoder();
+const systemProgram = address(SYSTEM_PROGRAM_ID);
 
 function encoded(value: Address): Uint8Array {
   return new Uint8Array(addressEncoder.encode(value));
 }
 
-function programAccount(
-  value: Address,
-  owner: Address,
-  data: Uint8Array,
-  lamps: bigint,
-): WorldAccount {
-  return {
-    address: value,
-    programAddress: owner,
-    lamports: lamports(lamps),
-    data,
-    executable: false,
-    space: BigInt(data.length),
-  };
-}
-
-/** Wrap backend-neutral account bytes in a Kit account keyed at `value`. */
-function accountFrom(value: Address, raw: RawAccount): WorldAccount {
-  return programAccount(value, address(raw.owner), raw.data, raw.lamports);
-}
-
-function systemAccount(value: Address, lamps: bigint): WorldAccount {
-  return accountFrom(value, systemAccountData(lamps));
-}
-
-const runtimeConverters: LiteSvmConverters<Address, WorldAccount, Instruction> = {
-  addressString: value => value,
-  instructionToRt: instruction => ({
-    programAddress: instruction.programAddress,
-    accounts: (instruction.accounts ?? []).map(meta => ({
-      address: meta.address,
-      signer: isSignerRole(meta.role),
-      writable: isWritableRole(meta.role),
-    })),
-    data: instruction.data ? Uint8Array.from(instruction.data) : new Uint8Array(),
-  }),
-  accountToRt: account => ({
-    address: account.address,
-    owner: account.programAddress,
+const adapter: HarnessAdapter<Address, WorldAccount, Instruction, Outcome> = {
+  addressKey: value => value,
+  addressToBytes: encoded,
+  bytesToAddress: bytes => addressDecoder.decode(bytes) as Address,
+  accountAddress: account => account.address,
+  accountData: account => account.data,
+  accountOwner: account => account.programAddress,
+  accountToWire: account => ({
+    address: encoded(account.address),
+    owner: encoded(account.programAddress),
     lamports: BigInt(account.lamports),
     data: account.data,
     executable: account.executable,
   }),
   buildAccount: account => ({
-    address: address(account.address),
-    programAddress: address(account.owner),
+    address: addressDecoder.decode(account.address) as Address,
+    programAddress: addressDecoder.decode(account.owner) as Address,
     lamports: lamports(account.lamports),
     data: account.data,
     executable: account.executable,
     space: BigInt(account.data.length),
   }),
-};
-
-const adapter: HarnessAdapter<
-  Address,
-  WorldAccount,
-  Instruction,
-  Outcome
-> = {
-  addressKey: value => value,
-  freshAddress: bytes => getAddressDecoder().decode(bytes) as Address,
-  accountAddress: account => account.address,
-  accountData: account => account.data,
-  accountOwner: account => account.programAddress,
-  accountLamports: account => BigInt(account.lamports),
-  instructionAccounts: instruction =>
-    (instruction.accounts ?? []).map(meta => ({
-      address: meta.address,
-      writable: isWritableRole(meta.role),
+  instructionToWire: instruction => ({
+    programId: encoded(instruction.programAddress),
+    data: instruction.data ? Uint8Array.from(instruction.data) : new Uint8Array(),
+    accounts: (instruction.accounts ?? []).map(meta => ({
+      pubkey: encoded(meta.address),
       signer: isSignerRole(meta.role),
+      writable: isWritableRole(meta.role),
     })),
-  emptyAccount: value => systemAccount(value, 0n),
-  fundedAccount: value => systemAccount(value, DEFAULT_WALLET_LAMPORTS),
-  programAccount,
+  }),
   tokenAmount: account => BigInt(getTokenDecoder().decode(account.data).amount),
   mintSupply: account => BigInt(getMintDecoder().decode(account.data).supply),
-  accountsEqual: (left, right) =>
-    left === null
-      ? right === null
-      : right !== null &&
-        left.address === right.address &&
-        left.programAddress === right.programAddress &&
-        BigInt(left.lamports) === BigInt(right.lamports) &&
-        left.executable === right.executable &&
-        bytesEqual(left.data, right.data),
   async deriveAta(owner, mint, tokenProgram) {
     const tokenProgramId = address(
       tokenProgram === TokenProgram.Token2022
@@ -203,18 +138,9 @@ const adapter: HarnessAdapter<
 };
 
 /** An isolated fixture-first test world using Kit address and account types. */
-export class Test extends TestCore<
-  Address,
-  WorldAccount,
-  Instruction,
-  Outcome
-> {
-  constructor(
-    programId?: Address,
-    elf?: Uint8Array,
-    options: TestOptions = {},
-  ) {
-    super(new LiteSvmRuntime(runtimeConverters), adapter, programId, elf, options);
+export class Test extends TestCore<Address, WorldAccount, Instruction, Outcome> {
+  constructor(programId?: Address, elf?: Uint8Array, options: TestOptions = {}) {
+    super(adapter, programId, elf, options);
   }
 
   static async load(
@@ -231,30 +157,7 @@ export class Test extends TestCore<
   }
 }
 
-const fixtures = createFixtureFactories<Address, WorldAccount, Test>({
-  systemAccount: (value, lamps) => systemAccount(value, lamps),
-  programAccount,
-  mintAccount: (value, authority, freezeAuthority, supply, decimals, tokenProgram) =>
-    accountFrom(
-      value,
-      mintAccountData(
-        { decimals, mintAuthority: authority, freezeAuthority, supply },
-        tokenProgram === TokenProgram.Token2022
-          ? SPL_TOKEN_2022_PROGRAM_ID
-          : SPL_TOKEN_PROGRAM_ID,
-      ),
-    ),
-  tokenAccount: (value, mint, owner, amount, tokenProgram) =>
-    accountFrom(
-      value,
-      tokenAccountData(
-        { amount, mint, owner },
-        tokenProgram === TokenProgram.Token2022
-          ? SPL_TOKEN_2022_PROGRAM_ID
-          : SPL_TOKEN_PROGRAM_ID,
-      ),
-    ),
-});
+const fixtures = createFixtureFactories<Address, Test>();
 
 export const {
   account,

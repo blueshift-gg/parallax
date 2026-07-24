@@ -420,6 +420,38 @@ describe("typed account ergonomics", () => {
     );
   });
 
+  // The kernel owns ATA derivation; `deriveAta` is the one derivation the shell
+  // still performs (for naming). Cross-check it against the address the kernel
+  // returns from an ATA install, for both token programs.
+  it("derives the same ATA address the kernel installs", async () => {
+    using kit = new KitTest();
+    const [owner] = await kit.add([kitWallet()] as const);
+    for (const tokenProgram of ["legacy", "token2022"] as const) {
+      const mintAddress = await kit.add(kitMint({ authority: owner, tokenProgram }));
+      const installed = await kit.add(
+        kitAssociatedTokenAccount(mintAddress, owner, { amount: 1n, tokenProgram }),
+      );
+      expect(await kit.deriveAta(owner, mintAddress, tokenProgram)).toBe(installed);
+    }
+
+    using web3 = new Web3Test();
+    const [web3Owner] = await web3.add([web3Wallet()] as const);
+    for (const tokenProgram of ["legacy", "token2022"] as const) {
+      const mintAddress = await web3.add(
+        web3Mint({ authority: web3Owner, tokenProgram }),
+      );
+      const installed = await web3.add(
+        web3AssociatedTokenAccount(mintAddress, web3Owner, {
+          amount: 1n,
+          tokenProgram,
+        }),
+      );
+      expect((await web3.deriveAta(web3Owner, mintAddress, tokenProgram)).toBase58()).toBe(
+        installed.toBase58(),
+      );
+    }
+  });
+
   it("builds co-signer metas and auto-registers missing signers (Kit)", async () => {
     using test = new KitTest();
     const [authority, recipient] = await test.add([

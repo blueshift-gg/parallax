@@ -1,9 +1,16 @@
 import {
-  FRESH_ADDRESS,
   rentMinimumBalance,
+  TokenProgram,
   type Fixture,
-  type TokenProgram,
+  type FixtureHost,
+  type MintInstall,
 } from "./fixture.js";
+import {
+  Kernel,
+  WireTokenProgram,
+  type WireAccount,
+  type WireInstruction,
+} from "./kernel.js";
 import {
   AccountChange,
   decodeAccount,
@@ -20,72 +27,50 @@ type Installed<Input> = Input extends readonly unknown[]
   ? { [Index in keyof Input]: FixtureValue<Input[Index]> }
   : FixtureValue<Input>;
 
-interface InstructionAccount<Address> {
-  address: Address;
-  writable: boolean;
-  signer: boolean;
-}
-
 /** Stable runtime limits accepted by both TypeScript test adapters. */
 export interface TestOptions {
   /** Maximum compute units available to one transaction. */
   readonly computeUnitLimit?: bigint;
 }
 
-export interface HarnessResult<Account> extends RawExecutionResult {
-  readonly accounts: readonly Account[];
-}
-
-export interface HarnessRuntime<Address, Account, Instruction> {
-  addProgram(programId: Address, elf: Uint8Array, loaderVersion?: number): unknown;
-  processInstructionChain(
-    instructions: Instruction[],
-    accounts: Account[],
-  ): HarnessResult<Account>;
-  simulateInstructionChain(
-    instructions: Instruction[],
-    accounts: Account[],
-  ): HarnessResult<Account>;
-  setComputeBudget(maxUnits: bigint): void;
-  warpToTimestamp(timestamp: bigint): void;
-  free(): void;
-}
-
+/**
+ * Adapter glue between a native address/account/instruction world and the
+ * kernel's raw byte wire. Extends the read-only `OutcomeAdapter` an `Outcome`
+ * uses with the conversions the kernel boundary needs.
+ */
 export interface HarnessAdapter<Address, Account, Instruction, Output>
   extends OutcomeAdapter<Address, Account> {
-  freshAddress(bytes: Uint8Array): Address;
-  accountLamports(account: Account): bigint;
-  instructionAccounts(instruction: Instruction): readonly InstructionAccount<Address>[];
-  emptyAccount(address: Address): Account;
-  fundedAccount(address: Address): Account;
-  programAccount(
-    address: Address,
-    owner: Address,
-    data: Uint8Array,
-    lamports: bigint,
-  ): Account;
-  accountsEqual(left: Account | null, right: Account | null): boolean;
+  addressToBytes(address: Address): Uint8Array;
+  bytesToAddress(bytes: Uint8Array): Address;
+  accountToWire(account: Account): WireAccount;
+  buildAccount(account: WireAccount): Account;
+  instructionToWire(instruction: Instruction): WireInstruction;
   deriveAta(owner: Address, mint: Address, tokenProgram: TokenProgram): Promise<Address>;
   deriveProgramAddress(
     seeds: readonly Uint8Array[],
     programId: Address,
   ): Promise<readonly [Address, number]>;
   outcome(
-    result: HarnessResult<Account>,
+    result: RawExecutionResult,
     accounts: readonly Account[],
     changes: readonly AccountChange<Address, Account>[],
   ): Output;
 }
 
-export class TestCore<Address, Account, Instruction, Output> {
-  readonly #runtime: HarnessRuntime<Address, Account, Instruction>;
+function wireTokenProgram(tokenProgram: TokenProgram): WireTokenProgram {
+  return tokenProgram === TokenProgram.Token2022
+    ? WireTokenProgram.Token2022
+    : WireTokenProgram.Legacy;
+}
+
+export class TestCore<Address, Account, Instruction, Output>
+  implements FixtureHost<Address>
+{
+  readonly #kernel: Kernel;
   readonly #adapter: HarnessAdapter<Address, Account, Instruction, Output>;
-  readonly #accounts = new Map<string, Account>();
   readonly #primaryProgramId: Address | undefined;
-  #freshAddresses = 0n;
 
   protected constructor(
-    runtime: HarnessRuntime<Address, Account, Instruction>,
     adapter: HarnessAdapter<Address, Account, Instruction, Output>,
     programId?: Address,
     elf?: Uint8Array,
@@ -94,9 +79,9 @@ export class TestCore<Address, Account, Instruction, Output> {
     if ((programId === undefined) !== (elf === undefined)) {
       throw new Error("Test needs both a program address and ELF, or neither");
     }
-    this.#runtime = runtime;
     this.#adapter = adapter;
     this.#primaryProgramId = programId;
+    let computeUnitLimit: bigint | null = null;
     if (options.computeUnitLimit !== undefined) {
       if (
         options.computeUnitLimit < 0n ||
@@ -104,11 +89,13 @@ export class TestCore<Address, Account, Instruction, Output> {
       ) {
         throw new Error("computeUnitLimit must fit a u64");
       }
-      runtime.setComputeBudget(options.computeUnitLimit);
+      computeUnitLimit = options.computeUnitLimit;
     }
-    if (programId !== undefined && elf !== undefined) {
-      this.loadProgram(programId, elf);
-    }
+    this.#kernel = Kernel.create(
+      programId === undefined ? null : adapter.addressToBytes(programId),
+      elf ?? null,
+      computeUnitLimit,
+    );
   }
 
   get programId(): Address {
@@ -134,15 +121,107 @@ export class TestCore<Address, Account, Instruction, Output> {
     return installed as Installed<Input>;
   }
 
+  // --- Fixture install surface (FixtureHost) --------------------------------
+
+  installWallet(address: Address | undefined, fund: bigint | undefined): Address {
+    return this.#adapter.bytesToAddress(
+      this.#kernel.installWallet(
+        address === undefined ? null : this.#adapter.addressToBytes(address),
+        fund ?? null,
+      ),
+    );
+  }
+
+  installMint(options: MintInstall<Address>): Address {
+    const [mint] = this.#kernel.installMint({
+      authority:
+        options.authority === undefined
+          ? null
+          : this.#adapter.addressToBytes(options.authority),
+      freezeAuthority:
+        options.freezeAuthority === undefined
+          ? null
+          : this.#adapter.addressToBytes(options.freezeAuthority),
+      supply: options.supply,
+      decimals: options.decimals,
+      tokenProgram: wireTokenProgram(options.tokenProgram),
+      holders: options.holders.map(([owner, amount]) => [
+        this.#adapter.addressToBytes(owner),
+        amount,
+      ]),
+    });
+    return this.#adapter.bytesToAddress(mint);
+  }
+
+  installTokenAccount(
+    mint: Address,
+    owner: Address,
+    address: Address | undefined,
+    amount: bigint,
+    tokenProgram: TokenProgram,
+  ): Address {
+    return this.#adapter.bytesToAddress(
+      this.#kernel.installTokenAccount(
+        address === undefined ? null : this.#adapter.addressToBytes(address),
+        this.#adapter.addressToBytes(mint),
+        this.#adapter.addressToBytes(owner),
+        amount,
+        wireTokenProgram(tokenProgram),
+      ),
+    );
+  }
+
+  installAta(
+    mint: Address,
+    owner: Address,
+    amount: bigint,
+    tokenProgram: TokenProgram,
+  ): Address {
+    return this.#adapter.bytesToAddress(
+      this.#kernel.installAta(
+        this.#adapter.addressToBytes(mint),
+        this.#adapter.addressToBytes(owner),
+        amount,
+        wireTokenProgram(tokenProgram),
+      ),
+    );
+  }
+
+  installRawAccount(
+    address: Address,
+    owner: Address,
+    lamports: bigint | undefined,
+    data: Uint8Array,
+  ): Address {
+    return this.#adapter.bytesToAddress(
+      this.#kernel.installRawAccount(
+        this.#adapter.addressToBytes(address),
+        this.#adapter.addressToBytes(owner),
+        lamports ?? rentMinimumBalance(data.length),
+        data,
+      ),
+    );
+  }
+
+  loadProgram(programId: Address, elf: Uint8Array): Address {
+    this.#kernel.loadProgram(this.#adapter.addressToBytes(programId), elf);
+    return programId;
+  }
+
+  // --- Account reads --------------------------------------------------------
+
   setAccount(account: Account): void {
-    this.#accounts.set(
-      this.#adapter.addressKey(this.#adapter.accountAddress(account)),
-      account,
+    this.#kernel.installRawAccount(
+      this.#adapter.addressToBytes(this.#adapter.accountAddress(account)),
+      this.#adapter.addressToBytes(this.#adapter.accountOwner(account)),
+      this.#adapter.lamports(account),
+      this.#adapter.accountData(account),
     );
   }
 
   account(address: Address): Account | null {
-    return this.#accounts.get(this.#adapter.addressKey(address)) ?? null;
+    const wire = this.#kernel.getAccount(this.#adapter.addressToBytes(address));
+    return wire === null ? null : this.#adapter.buildAccount(wire);
   }
 
   accountAs<Value>(
@@ -150,9 +229,7 @@ export class TestCore<Address, Account, Instruction, Output> {
     decode: (data: Uint8Array) => Value,
   ): Value | null {
     const account = this.account(address);
-    return account === null
-      ? null
-      : decode(this.#adapter.accountData(account));
+    return account === null ? null : decode(this.#adapter.accountData(account));
   }
 
   /**
@@ -189,30 +266,7 @@ export class TestCore<Address, Account, Instruction, Output> {
     const bytes = new Uint8Array(discriminator.length + body.length);
     bytes.set(discriminator, 0);
     bytes.set(body, discriminator.length);
-    this.setAccount(
-      this.#adapter.programAccount(
-        address,
-        codec.owner,
-        bytes,
-        rentMinimumBalance(bytes.length),
-      ),
-    );
-    return address;
-  }
-
-  loadProgram(programId: Address, elf: Uint8Array, loaderVersion?: number): void {
-    this.#runtime.addProgram(programId, elf, loaderVersion);
-  }
-
-  // Package-internal deterministic address generator, keyed by a non-exported
-  // symbol so it is not part of the public API. Fixtures use it to place
-  // accounts the caller did not pin; tests read back the returned address.
-  [FRESH_ADDRESS](): Address {
-    this.#freshAddresses += 1n;
-    const bytes = new Uint8Array(32);
-    bytes.set(new TextEncoder().encode("parallax/fresh-address"));
-    new DataView(bytes.buffer).setBigUint64(24, this.#freshAddresses, true);
-    return this.#adapter.freshAddress(bytes);
+    return this.installRawAccount(address, codec.owner, undefined, bytes);
   }
 
   deriveAta(
@@ -234,7 +288,7 @@ export class TestCore<Address, Account, Instruction, Output> {
   }
 
   lamports(address: Address): bigint {
-    return this.#adapter.accountLamports(this.#requiredAccount(address));
+    return this.#adapter.lamports(this.#requiredAccount(address));
   }
 
   tokens(address: Address): bigint {
@@ -252,8 +306,10 @@ export class TestCore<Address, Account, Instruction, Output> {
     ) {
       throw new Error("timestamp must fit an i64");
     }
-    this.#runtime.warpToTimestamp(timestamp);
+    this.#kernel.warpToTimestamp(timestamp);
   }
+
+  // --- Execution ------------------------------------------------------------
 
   send(instruction: Instruction): Output {
     return this.#execute([instruction], [], true);
@@ -272,7 +328,7 @@ export class TestCore<Address, Account, Instruction, Output> {
   }
 
   free(): void {
-    this.#runtime.free();
+    this.#kernel.free();
   }
 
   [Symbol.dispose](): void {
@@ -288,96 +344,46 @@ export class TestCore<Address, Account, Instruction, Output> {
       throw new Error("a transaction needs an instruction");
     }
 
-    const inputs = new Map<string, Account>();
+    const wireAccounts = explicitAccounts.map(account =>
+      this.#adapter.accountToWire(account),
+    );
+    const seen = new Set<string>();
     for (const account of explicitAccounts) {
-      const address = this.#adapter.accountAddress(account);
-      const key = this.#adapter.addressKey(address);
-      if (inputs.has(key)) {
+      const key = this.#adapter.addressKey(this.#adapter.accountAddress(account));
+      if (seen.has(key)) {
         throw new Error(`transaction input contains account ${key} more than once`);
       }
-      inputs.set(key, account);
+      seen.add(key);
     }
 
-    const tracked = new Map<string, InstructionAccount<Address>>();
-    for (const instruction of instructions) {
-      for (const meta of this.#adapter.instructionAccounts(instruction)) {
-        const key = this.#adapter.addressKey(meta.address);
-        const previous = tracked.get(key);
-        tracked.set(key, {
-          address: meta.address,
-          writable: meta.writable || previous?.writable === true,
-          signer: meta.signer || previous?.signer === true,
-        });
-      }
-    }
-
-    for (const [key, account] of inputs) {
-      if (tracked.has(key)) continue;
-      tracked.set(key, {
-        address: this.#adapter.accountAddress(account),
-        writable: false,
-        signer: false,
-      });
-    }
-
-    // Backfill accounts a transaction names but the world has not installed. A
-    // missing writable account is an init target — including keypair accounts
-    // that sign their own creation — and enters as Solana's empty system
-    // account, exactly as a brand-new keypair account arrives on chain; the
-    // backend commits that input only when execution succeeds, so init targets
-    // persist without polluting the world after a failed transaction. A missing
-    // read-only signer (a co-signer, e.g. a multisig member) enters as a funded
-    // system account, matching the real wallets those signatures come from.
-    // Actors that pay — payers, makers — are world state: install them with
-    // `wallet()`.
-    const before = new Map<string, Account | null>();
-    for (const [key, meta] of tracked) {
-      const account = inputs.get(key) ?? this.#accounts.get(key) ?? null;
-      before.set(key, account);
-      if (!inputs.has(key)) {
-        if (account !== null) {
-          inputs.set(key, account);
-        } else if (meta.writable) {
-          inputs.set(key, this.#adapter.emptyAccount(meta.address));
-        } else if (meta.signer) {
-          inputs.set(key, this.#adapter.fundedAccount(meta.address));
-        }
-      }
-    }
-
-    const result = commit
-      ? this.#runtime.processInstructionChain(instructions, [...inputs.values()])
-      : this.#runtime.simulateInstructionChain(instructions, [...inputs.values()]);
-
-    const succeeded = result.status.ok;
-    const resultingAccounts = result.accounts;
-    if (commit && succeeded) {
-      for (const account of resultingAccounts) {
-        this.setAccount(account);
-      }
-    }
-
-    const returned = new Map(
-      resultingAccounts.map(account => [
-        this.#adapter.addressKey(this.#adapter.accountAddress(account)),
-        account,
-      ]),
+    const wireInstructions = instructions.map(instruction =>
+      this.#adapter.instructionToWire(instruction),
     );
-    const outcomeAccounts: Account[] = [];
-    const changes: AccountChange<Address, Account>[] = [];
-    for (const [key, meta] of tracked) {
-      const previous = before.get(key) ?? null;
-      const next = succeeded ? (returned.get(key) ?? null) : previous;
-      if (next !== null) outcomeAccounts.push(next);
-      if (
-        succeeded &&
-        meta.writable &&
-        !this.#adapter.accountsEqual(previous, next)
-      ) {
-        changes.push(new AccountChange(meta.address, previous, next));
-      }
-    }
-    return this.#adapter.outcome(result, outcomeAccounts, changes);
+    const bundle = commit
+      ? this.#kernel.send(wireInstructions, wireAccounts)
+      : this.#kernel.simulate(wireInstructions, wireAccounts);
+
+    const result: RawExecutionResult = {
+      status:
+        bundle.error === null
+          ? { ok: true }
+          : { ok: false, error: bundle.error },
+      computeUnits: bundle.computeUnits,
+      logs: bundle.logs,
+      returnData: bundle.returnData,
+    };
+    const accounts = bundle.accounts.map(account =>
+      this.#adapter.buildAccount(account),
+    );
+    const changes = bundle.changes.map(
+      change =>
+        new AccountChange(
+          this.#adapter.bytesToAddress(change.address),
+          change.before === null ? null : this.#adapter.buildAccount(change.before),
+          change.after === null ? null : this.#adapter.buildAccount(change.after),
+        ),
+    );
+    return this.#adapter.outcome(result, accounts, changes);
   }
 
   #requiredAccount(address: Address): Account {

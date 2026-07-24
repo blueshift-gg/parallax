@@ -6,19 +6,6 @@ import {
 } from "@solana/web3.js";
 import { readFile } from "node:fs/promises";
 import {
-  LiteSvmRuntime,
-  type LiteSvmConverters,
-} from "./internal/litesvm.js";
-import {
-  mintAccountData,
-  SPL_ASSOCIATED_TOKEN_PROGRAM_ID,
-  SPL_TOKEN_2022_PROGRAM_ID,
-  SPL_TOKEN_PROGRAM_ID,
-  systemAccountData,
-  tokenAccountData,
-  type RawAccount,
-} from "./internal/spl.js";
-import {
   createFixtureFactories,
   DEFAULT_WALLET_LAMPORTS,
   TokenProgram,
@@ -35,6 +22,12 @@ import {
   type AccountChange as SharedAccountChange,
   type AccountCodec as SharedAccountCodec,
 } from "./internal/outcome.js";
+import {
+  SPL_ASSOCIATED_TOKEN_PROGRAM_ID,
+  SPL_TOKEN_2022_PROGRAM_ID,
+  SPL_TOKEN_PROGRAM_ID,
+  SYSTEM_PROGRAM_ID,
+} from "./internal/programs.js";
 import {
   TestCore,
   type HarnessAdapter,
@@ -72,61 +65,23 @@ export function addressesEqual(left: Address, right: Address): boolean {
   return left.equals(right);
 }
 
-const systemProgram = new Address("11111111111111111111111111111111");
+const systemProgram = new Address(SYSTEM_PROGRAM_ID);
 
-function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
-  return (
-    left.length === right.length &&
-    left.every((byte, index) => byte === right[index])
-  );
-}
-
-function programAccount(
-  value: Address,
-  owner: Address,
-  data: Uint8Array,
-  lamps: bigint,
-): KeyedAccountInfo {
-  return {
-    accountId: value,
-    accountInfo: {
-      data,
-      executable: false,
-      lamports: lamps,
-      owner,
-      rentEpoch: 0n,
-      space: BigInt(data.length),
-    },
-  };
-}
-
-/** Wrap backend-neutral account bytes in a Web3.js account keyed at `value`. */
-function accountFrom(value: Address, raw: RawAccount): KeyedAccountInfo {
-  return programAccount(value, new Address(raw.owner), raw.data, raw.lamports);
-}
-
-function systemAccount(value: Address, lamps: bigint): KeyedAccountInfo {
-  return accountFrom(value, systemAccountData(lamps));
-}
-
-const runtimeConverters: LiteSvmConverters<
+const adapter: HarnessAdapter<
   Address,
   KeyedAccountInfo,
-  TransactionInstruction
+  TransactionInstruction,
+  Outcome
 > = {
-  addressString: value => value.toBase58(),
-  instructionToRt: instruction => ({
-    programAddress: instruction.programId.toBase58(),
-    accounts: instruction.keys.map(meta => ({
-      address: meta.pubkey.toBase58(),
-      signer: meta.isSigner,
-      writable: meta.isWritable,
-    })),
-    data: new Uint8Array(instruction.data),
-  }),
-  accountToRt: account => ({
-    address: account.accountId.toBase58(),
-    owner: account.accountInfo.owner.toBase58(),
+  addressKey: value => value.toBase58(),
+  addressToBytes: value => new Uint8Array(value.toBytes()),
+  bytesToAddress: bytes => new Address(bytes),
+  accountAddress: account => account.accountId,
+  accountData: account => account.accountInfo.data,
+  accountOwner: account => account.accountInfo.owner,
+  accountToWire: account => ({
+    address: new Uint8Array(account.accountId.toBytes()),
+    owner: new Uint8Array(account.accountInfo.owner.toBytes()),
     lamports: account.accountInfo.lamports,
     data: account.accountInfo.data,
     executable: account.accountInfo.executable,
@@ -142,42 +97,19 @@ const runtimeConverters: LiteSvmConverters<
       space: BigInt(account.data.length),
     },
   }),
-};
-
-const adapter: HarnessAdapter<
-  Address,
-  KeyedAccountInfo,
-  TransactionInstruction,
-  Outcome
-> = {
-  addressKey: value => value.toBase58(),
-  freshAddress: bytes => new Address(bytes),
-  accountAddress: account => account.accountId,
-  accountData: account => account.accountInfo.data,
-  accountOwner: account => account.accountInfo.owner,
-  accountLamports: account => account.accountInfo.lamports,
-  instructionAccounts: instruction =>
-    instruction.keys.map(meta => ({
-      address: meta.pubkey,
-      writable: meta.isWritable,
+  instructionToWire: instruction => ({
+    programId: new Uint8Array(instruction.programId.toBytes()),
+    data: new Uint8Array(instruction.data),
+    accounts: instruction.keys.map(meta => ({
+      pubkey: new Uint8Array(meta.pubkey.toBytes()),
       signer: meta.isSigner,
+      writable: meta.isWritable,
     })),
-  emptyAccount: value => systemAccount(value, 0n),
-  fundedAccount: value => systemAccount(value, DEFAULT_WALLET_LAMPORTS),
-  programAccount,
+  }),
   tokenAmount: account =>
     BigInt(getTokenDecoder().decode(account.accountInfo.data).amount),
   mintSupply: account =>
     BigInt(getMintDecoder().decode(account.accountInfo.data).supply),
-  accountsEqual: (left, right) =>
-    left === null
-      ? right === null
-      : right !== null &&
-        left.accountId.equals(right.accountId) &&
-        left.accountInfo.owner.equals(right.accountInfo.owner) &&
-        left.accountInfo.lamports === right.accountInfo.lamports &&
-        left.accountInfo.executable === right.accountInfo.executable &&
-        bytesEqual(left.accountInfo.data, right.accountInfo.data),
   async deriveAta(owner, mint, tokenProgram) {
     return (await Address.findProgramAddress(
       [
@@ -211,12 +143,8 @@ export class Test extends TestCore<
   TransactionInstruction,
   Outcome
 > {
-  constructor(
-    programId?: Address,
-    elf?: Uint8Array,
-    options: TestOptions = {},
-  ) {
-    super(new LiteSvmRuntime(runtimeConverters), adapter, programId, elf, options);
+  constructor(programId?: Address, elf?: Uint8Array, options: TestOptions = {}) {
+    super(adapter, programId, elf, options);
   }
 
   static async load(
@@ -233,35 +161,7 @@ export class Test extends TestCore<
   }
 }
 
-const fixtures = createFixtureFactories<Address, KeyedAccountInfo, Test>({
-  systemAccount: (value, lamps) => systemAccount(value, lamps),
-  programAccount,
-  mintAccount: (value, authority, freezeAuthority, supply, decimals, tokenProgram) =>
-    accountFrom(
-      value,
-      mintAccountData(
-        {
-          decimals,
-          mintAuthority: authority?.toBase58(),
-          freezeAuthority: freezeAuthority?.toBase58(),
-          supply,
-        },
-        tokenProgram === TokenProgram.Token2022
-          ? SPL_TOKEN_2022_PROGRAM_ID
-          : SPL_TOKEN_PROGRAM_ID,
-      ),
-    ),
-  tokenAccount: (value, mint, owner, amount, tokenProgram) =>
-    accountFrom(
-      value,
-      tokenAccountData(
-        { amount, mint: mint.toBase58(), owner: owner.toBase58() },
-        tokenProgram === TokenProgram.Token2022
-          ? SPL_TOKEN_2022_PROGRAM_ID
-          : SPL_TOKEN_PROGRAM_ID,
-      ),
-    ),
-});
+const fixtures = createFixtureFactories<Address, Test>();
 
 export const {
   account,
