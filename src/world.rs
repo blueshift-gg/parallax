@@ -207,6 +207,17 @@ impl Test {
         self.backend.warp_to_timestamp(timestamp);
     }
 
+    /// Set the transaction compute-unit limit for this world.
+    ///
+    /// The builder equivalent is [`TestBuilder::compute_unit_limit`]; this
+    /// reconfigures the budget on an already-built world, preserving every
+    /// loaded program and installed account.
+    ///
+    /// [`TestBuilder::compute_unit_limit`]: crate::TestBuilder::compute_unit_limit
+    pub fn set_compute_unit_limit(&mut self, limit: u64) {
+        self.backend.set_compute_unit_limit(limit);
+    }
+
     /// Execute and commit one instruction.
     pub fn send(&mut self, instruction: impl Into<Instruction>) -> Outcome {
         self.execute([instruction.into()], Vec::new(), true)
@@ -236,9 +247,67 @@ impl Test {
         self.execute([instruction.into()], accounts.into_iter().collect(), true)
     }
 
+    /// Execute and commit an atomic instruction sequence with raw
+    /// transaction-input accounts.
+    ///
+    /// Generalizes [`Self::send_all`] and [`Self::send_with`]: the chain runs
+    /// with the same first-appearance tracking and backfill, and any explicit
+    /// `accounts` seed or override world state for the transaction's inputs.
+    pub fn send_all_with<I, T>(
+        &mut self,
+        instructions: I,
+        accounts: impl IntoIterator<Item = Account>,
+    ) -> Outcome
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Instruction>,
+    {
+        self.execute(
+            instructions.into_iter().map(Into::into).collect::<Vec<_>>(),
+            accounts.into_iter().collect(),
+            true,
+        )
+    }
+
     /// Execute an instruction without committing its changes.
     pub fn simulate(&mut self, instruction: impl Into<Instruction>) -> Outcome {
         self.execute([instruction.into()], Vec::new(), false)
+    }
+
+    /// Simulate an atomic instruction sequence without committing its changes.
+    ///
+    /// The multi-instruction counterpart of [`Self::simulate`], mirroring
+    /// [`Self::send_all`] on the commit side.
+    pub fn simulate_all<I, T>(&mut self, instructions: I) -> Outcome
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Instruction>,
+    {
+        self.execute(
+            instructions.into_iter().map(Into::into).collect::<Vec<_>>(),
+            Vec::new(),
+            false,
+        )
+    }
+
+    /// Simulate an atomic instruction sequence with raw transaction-input
+    /// accounts, without committing its changes.
+    ///
+    /// The simulation counterpart of [`Self::send_all_with`].
+    pub fn simulate_all_with<I, T>(
+        &mut self,
+        instructions: I,
+        accounts: impl IntoIterator<Item = Account>,
+    ) -> Outcome
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Instruction>,
+    {
+        self.execute(
+            instructions.into_iter().map(Into::into).collect::<Vec<_>>(),
+            accounts.into_iter().collect(),
+            false,
+        )
     }
 
     fn execute(

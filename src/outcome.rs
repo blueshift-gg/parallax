@@ -110,6 +110,16 @@ impl Outcome {
             .find(|account| account.address == address)
     }
 
+    /// Every tracked account's resulting post-state, in first-appearance
+    /// instruction order.
+    ///
+    /// Accounts that no longer exist after execution (closed or never created)
+    /// are omitted, as they have no post-state; a removed writable account
+    /// still surfaces through [`Self::account_changes`] with a `None` after.
+    pub fn accounts(&self) -> &[Account] {
+        &self.accounts
+    }
+
     /// Decode a resulting account with a caller-supplied decoder.
     pub fn account_as<T>(
         &self,

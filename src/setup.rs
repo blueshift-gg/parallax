@@ -25,6 +25,7 @@ pub struct TestBuilder {
     pub(super) compute_unit_limit: Option<u64>,
     pub(super) program_path: Option<PathBuf>,
     pub(super) crate_name: Option<String>,
+    pub(super) program_elf: Option<Vec<u8>>,
 }
 
 impl TestBuilder {
@@ -34,6 +35,7 @@ impl TestBuilder {
             compute_unit_limit: None,
             program_path: None,
             crate_name: None,
+            program_elf: None,
         }
     }
 
@@ -57,8 +59,36 @@ impl TestBuilder {
         self
     }
 
+    /// Load the primary program from in-memory ELF bytes, skipping on-disk
+    /// artifact discovery and the sibling CPI-bundle scan.
+    ///
+    /// Use when the caller already holds the compiled program — a host that
+    /// passes bytes across an FFI boundary, or a test embedding the artifact
+    /// with `include_bytes!`. When set, [`Self::build`] loads exactly this ELF
+    /// under the id passed to [`Test::builder`](crate::Test::builder) and
+    /// ignores [`Self::program_path`], [`Self::crate_name`], and
+    /// [`PROGRAM_PATH_ENV`]. Additional programs are added afterwards with
+    /// [`Test::load_program`](crate::Test::load_program).
+    pub fn program_bytes(mut self, elf: impl Into<Vec<u8>>) -> Self {
+        self.program_elf = Some(elf.into());
+        self
+    }
+
     /// Load the program and start the world.
     pub fn build(self) -> Result<Test, SetupError> {
+        if let Some(elf) = self.program_elf {
+            let mut backend = Backend::new();
+            if let Some(limit) = self.compute_unit_limit {
+                backend.set_compute_unit_limit(limit);
+            }
+            backend.load_program(&self.program_id, &elf);
+            return Ok(Test {
+                backend,
+                program_id: self.program_id,
+                program_path: PathBuf::new(),
+                fresh_addresses: 0,
+            });
+        }
         let path = match self.program_path {
             Some(path) => path,
             None => resolve_program_path(self.crate_name.as_deref())?,
