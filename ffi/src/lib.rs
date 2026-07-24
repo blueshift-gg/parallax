@@ -290,6 +290,56 @@ mod tests {
         parallax_free(handle);
     }
 
+    /// A world with no primary program (`elf_len == 0`) still executes
+    /// built-in programs: the fixture-only test worlds the TypeScript shell
+    /// constructs with `new Test()` depend on this path.
+    #[test]
+    fn program_less_world_executes_builtin_programs() {
+        let program_id = [0u8; 32];
+        let handle = parallax_new(
+            &program_id as *const [u8; 32],
+            std::ptr::null(),
+            0,
+            false,
+            0,
+        );
+        assert!(!handle.is_null(), "program-less parallax_new returned null");
+
+        let payer = Pubkey::new_from_array([31u8; 32]);
+        let recipient = Pubkey::new_from_array([32u8; 32]);
+        let start = 5_000_000_000u64;
+        let amount = 2_000_000_000u64;
+
+        let input = wallet_input(payer, start);
+        let mut out = [0u8; 32];
+        let code =
+            parallax_install_wallet(handle, input.as_ptr(), input.len() as u64, out.as_mut_ptr());
+        assert_eq!(code, PARALLAX_OK);
+
+        let ix = system_transfer_wire(payer, recipient, amount);
+        let mut result: *mut u8 = std::ptr::null_mut();
+        let mut result_len: u64 = 0;
+        let code = parallax_send(
+            handle,
+            ix.as_ptr(),
+            ix.len() as u64,
+            std::ptr::null(),
+            0,
+            &mut result,
+            &mut result_len,
+        );
+        assert_eq!(code, PARALLAX_OK, "send in a program-less world failed");
+        let blob = unsafe { std::slice::from_raw_parts(result, result_len as usize) };
+        let bundle = decode_bundle(blob);
+        parallax_free_bytes(result, result_len);
+
+        assert!(!bundle.is_err, "builtin transfer should succeed");
+        assert_eq!(bundle.changes.len(), 2);
+        assert_eq!(bundle.changes[1].2.as_ref().unwrap().lamports, amount);
+
+        parallax_free(handle);
+    }
+
     #[test]
     fn install_mint_returns_mint_and_holder_atas() {
         let Some(elf) = program_elf() else {
