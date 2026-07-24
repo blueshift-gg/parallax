@@ -225,6 +225,20 @@ describe("fixture-first test harness", () => {
       "timestamp must fit an i64",
     );
   });
+
+  // Memory discipline across the native boundary: an explicit free unregisters
+  // the finalizer and is idempotent (no double free of the world handle), and
+  // any use afterwards is a guarded throw, never a use-after-free into freed
+  // native memory.
+  it("frees the world safely: double free is a no-op, use-after-free throws", () => {
+    const test = new KitTest();
+    test.free();
+    expect(() => test.free()).not.toThrow();
+    expect(() => test.warpToTimestamp(1n)).toThrow(/freed/);
+    expect(() => test.account(getAddressDecoder().decode(new Uint8Array(32).fill(1)) as KitAddress)).toThrow(
+      /freed/,
+    );
+  });
 });
 
 describe("typed account ergonomics", () => {
