@@ -636,3 +636,88 @@ describe("writable-first account backfill", () => {
       .hasLamports(cosigner, DEFAULT_WALLET_LAMPORTS);
   });
 });
+
+// Determinism is a product property: two fresh worlds running the identical
+// scenario, through the shell, must produce deep-equal results — the outcome
+// surfaces (error, compute units, logs, return data, changes) and every
+// post-state account. The mirror of the Rust `two_worlds_produce_byte_identical`
+// test, exercised end to end through the native boundary.
+describe("determinism", () => {
+  type KitOutcome = ReturnType<InstanceType<typeof KitTest>["send"]>;
+
+  const systemTransfer = (
+    from: KitAddress,
+    to: KitAddress,
+    lamports: bigint,
+  ): Instruction => ({
+    programAddress: address(systemProgram),
+    accounts: [
+      { address: from, role: AccountRole.WRITABLE_SIGNER },
+      { address: to, role: AccountRole.WRITABLE },
+    ],
+    data: systemTransferData(lamports),
+  });
+
+  const fixedAddress = (fill: number): KitAddress =>
+    getAddressDecoder().decode(new Uint8Array(32).fill(fill)) as KitAddress;
+
+  const outcomeSnapshot = (outcome: KitOutcome) => ({
+    error: outcome.error,
+    computeUnits: outcome.computeUnits,
+    logs: outcome.logs,
+    returnData: outcome.returnData,
+    changes: outcome.accountChanges.map(change => ({
+      address: change.address,
+      before: change.before,
+      after: change.after,
+    })),
+  });
+
+  async function runScenario() {
+    using test = new KitTest();
+    const [payer, alice, bob] = await test.add([
+      kitWallet(),
+      kitWallet(),
+      kitWallet(),
+    ] as const);
+    const mint = await test.add(
+      kitMint({
+        authority: payer,
+        supply: 1_000n,
+        holders: [[alice, 400n], [bob, 600n]],
+      }),
+    );
+    const recipient = fixedAddress(9);
+    const ghost = fixedAddress(8);
+
+    // A successful send, then a failed one: the uninstalled writable signer
+    // enters as an empty init target with no lamports, so its transfer fails.
+    const ok = outcomeSnapshot(
+      test.send(systemTransfer(payer, recipient, 1_000_000n)),
+    );
+    const fail = outcomeSnapshot(
+      test.send(systemTransfer(ghost, recipient, 1_000_000n)),
+    );
+
+    const aliceAta = await test.deriveAta(alice, mint);
+    const bobAta = await test.deriveAta(bob, mint);
+    const accounts = [payer, alice, bob, mint, aliceAta, bobAta, recipient].map(
+      addr => test.account(addr),
+    );
+
+    return { ok, fail, accounts };
+  }
+
+  it("produces identical results across two fresh worlds", async () => {
+    const first = await runScenario();
+    const second = await runScenario();
+
+    expect(second).toEqual(first);
+
+    // Guard against a degenerate all-empty "determinism": the scenario really
+    // did a successful send that changed accounts and a send that failed.
+    expect(first.ok.error).toBeNull();
+    expect(first.ok.changes.length).toBeGreaterThan(0);
+    expect(first.fail.error).not.toBeNull();
+  });
+});

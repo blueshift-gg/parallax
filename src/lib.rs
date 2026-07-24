@@ -25,6 +25,20 @@
 //! points — this Rust crate and the `parallax-svm` TypeScript package (Kit and
 //! Web3.js) — must agree. Fixture addresses are deterministic and identical
 //! across all three.
+//!
+//! # Determinism
+//!
+//! Execution is deterministic and is treated as a guarantee, not an accident:
+//! two fresh [`Test`] worlds running the identical scenario produce
+//! byte-identical results — the same [`Outcome`] (error, compute units, logs,
+//! return data, account changes) and the same post-state account bytes. The
+//! backend seeds a fixed genesis blockhash and a zero-timestamp clock (no
+//! wall-clock reads, no RNG), fixture placement follows a per-world
+//! deterministic address sequence, and every observable ordering — the tracked
+//! account set, the outcome's accounts and changes — is first-appearance, never
+//! hash-map iteration. A run therefore reproduces exactly, in this crate and
+//! across the TypeScript harnesses. (Both harness test suites assert this
+//! directly against two worlds.)
 
 #![warn(missing_docs)]
 
