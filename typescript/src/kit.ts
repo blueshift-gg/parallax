@@ -77,14 +77,45 @@ const addressEncoder = getAddressEncoder();
 const addressDecoder = getAddressDecoder();
 const systemProgram = address(SYSTEM_PROGRAM_ID);
 
+// Kit's `Address` is a base58 string with no stored bytes, so every boundary
+// crossing base58-decodes it to 32 bytes (~6us) on the way in and base58-encodes
+// results back (~3.5us) on the way out — by far the shell's largest per-send
+// cost, and the reason a Kit send runs ~3x a Web3.js send whose `Address` keeps
+// its bytes. Both directions are pure functions of their input, a test reuses
+// the same handful of addresses across many instructions, and every account
+// owner repeats across an outcome, so memoize both. The maps are bounded: past a
+// generous ceiling they are cleared wholesale, so a long-lived process cannot
+// grow them without limit. Cached byte arrays are treated as immutable — the
+// only consumers are wire serializers, which copy them.
+const ADDRESS_CACHE_LIMIT = 50_000;
+const bytesByAddress = new Map<Address, Uint8Array>();
+const addressByBytes = new Map<string, Address>();
+
 function encoded(value: Address): Uint8Array {
-  return new Uint8Array(addressEncoder.encode(value));
+  let bytes = bytesByAddress.get(value);
+  if (bytes === undefined) {
+    if (bytesByAddress.size >= ADDRESS_CACHE_LIMIT) bytesByAddress.clear();
+    bytes = new Uint8Array(addressEncoder.encode(value));
+    bytesByAddress.set(value, bytes);
+  }
+  return bytes;
+}
+
+function decoded(bytes: Uint8Array): Address {
+  const key = Buffer.from(bytes).toString("latin1");
+  let value = addressByBytes.get(key);
+  if (value === undefined) {
+    if (addressByBytes.size >= ADDRESS_CACHE_LIMIT) addressByBytes.clear();
+    value = addressDecoder.decode(bytes) as Address;
+    addressByBytes.set(key, value);
+  }
+  return value;
 }
 
 const adapter: HarnessAdapter<Address, WorldAccount, Instruction, Outcome> = {
   addressKey: value => value,
   addressToBytes: encoded,
-  bytesToAddress: bytes => addressDecoder.decode(bytes) as Address,
+  bytesToAddress: decoded,
   accountAddress: account => account.address,
   accountData: account => account.data,
   accountOwner: account => account.programAddress,
@@ -96,8 +127,8 @@ const adapter: HarnessAdapter<Address, WorldAccount, Instruction, Outcome> = {
     executable: account.executable,
   }),
   buildAccount: account => ({
-    address: addressDecoder.decode(account.address) as Address,
-    programAddress: addressDecoder.decode(account.owner) as Address,
+    address: decoded(account.address),
+    programAddress: decoded(account.owner),
     lamports: lamports(account.lamports),
     data: account.data,
     executable: account.executable,
