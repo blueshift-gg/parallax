@@ -55,12 +55,12 @@ pub extern "C" fn parallax_new(
     }
     let built = catch_unwind(AssertUnwindSafe(|| {
         let id = Pubkey::new_from_array(unsafe { *program_id });
-        let elf = if elf_len == 0 {
-            Vec::new()
+        let mut builder = if elf_len == 0 {
+            Test::builder(id).no_program()
         } else {
-            unsafe { slice::from_raw_parts(elf, elf_len as usize) }.to_vec()
+            let elf = unsafe { slice::from_raw_parts(elf, elf_len as usize) };
+            Test::builder(id).program_bytes(elf.to_vec())
         };
-        let mut builder = Test::builder(id).program_bytes(elf);
         if has_compute_unit_limit {
             builder = builder.compute_unit_limit(compute_unit_limit);
         }

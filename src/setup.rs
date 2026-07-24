@@ -70,11 +70,26 @@ impl TestBuilder {
     /// [`PROGRAM_PATH_ENV`]. Additional programs are added afterwards with
     /// [`Test::load_program`](crate::Test::load_program).
     ///
-    /// Empty bytes build a world with no primary program (only the runtime's
-    /// built-ins, e.g. the SPL programs), for tests that exercise those without
-    /// a program of their own.
+    /// Empty bytes are equivalent to [`Self::no_program`].
     pub fn program_bytes(mut self, elf: impl Into<Vec<u8>>) -> Self {
         self.program_elf = Some(elf.into());
+        self
+    }
+
+    /// Build a world with no primary program, loading only the runtime's
+    /// built-in programs (the system program and the SPL Token, Token-2022, and
+    /// Associated Token programs).
+    ///
+    /// Use for tests that exercise only those built-ins — a bare token transfer,
+    /// an account layout — without a program of their own, or when every program
+    /// under test is added afterwards with
+    /// [`Test::load_program`](crate::Test::load_program). Like
+    /// [`Self::program_bytes`], this skips on-disk artifact discovery and the
+    /// sibling CPI-bundle scan; the id passed to
+    /// [`Test::builder`](crate::Test::builder) still names the world for PDA
+    /// derivation.
+    pub fn no_program(mut self) -> Self {
+        self.program_elf = Some(Vec::new());
         self
     }
 
@@ -85,8 +100,8 @@ impl TestBuilder {
             if let Some(limit) = self.compute_unit_limit {
                 backend.set_compute_unit_limit(limit);
             }
-            // Empty bytes mean "no primary program": build a world with just the
-            // runtime's built-ins.
+            // No ELF (an empty program_bytes, or no_program) means a world with
+            // just the runtime's built-ins; load nothing.
             if !elf.is_empty() {
                 backend.load_program(&self.program_id, &elf);
             }
