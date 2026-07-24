@@ -205,6 +205,20 @@
 //!  8 = UninitializedAccount       18 = Custom       (custom_code)
 //!  9 = MissingAccount             19 = Runtime      (runtime_msg)
 //! ```
+//!
+//! # Versioning
+//!
+//! There is deliberately **no version byte**. The two halves ship as one unit:
+//! the `parallax-svm` npm package pins the exact version of the per-platform
+//! binary that carries this format, so a released consumer and its transport
+//! can never disagree, and a per-message version byte would be pure per-call
+//! overhead. The one place they *can* diverge is local development, where the
+//! shell loads a repo-local `target/release` build the developer may have left
+//! stale; there, any incompatible shape change surfaces as a decode error — the
+//! bounds checks on every read and the `finish` trailing-data check turn a
+//! mismatch into a status code, never silent corruption. If the format ever
+//! needs to evolve while both halves are *not* shipped together, prepend a
+//! `[1] version` byte here and branch on it; until then it would earn nothing.
 
 use parallax_svm::{
     fixture::TokenProgram, Account, AccountMeta, Instruction, Outcome, ProgramError, Pubkey,
@@ -385,8 +399,12 @@ struct Writer {
 
 impl Writer {
     fn new() -> Self {
+        Self::with_capacity(1024)
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
         Self {
-            buf: Vec::with_capacity(1024),
+            buf: Vec::with_capacity(capacity),
         }
     }
 
@@ -671,9 +689,30 @@ pub fn serialize_optional_account(account: Option<&Account>) -> Box<[u8]> {
     w.into_boxed_slice()
 }
 
+/// Size of one wire `account` for a body of `data_len` bytes.
+fn account_wire_size(data_len: usize) -> usize {
+    ACCOUNT_MIN_SIZE + data_len
+}
+
 /// Encode the outcome bundle for a committed or simulated transaction.
 pub fn serialize_outcome(outcome: &Outcome) -> Box<[u8]> {
-    let mut w = Writer::new();
+    // Reserve for the account bodies up front — the bundle's dominant term — so
+    // a large-account outcome grows the buffer at most once. `before` states are
+    // the only per-change account body carried in full; each remaining change is
+    // an address plus two bytes.
+    let accounts = outcome.accounts();
+    let changes = outcome.account_changes();
+    let account_bytes: usize = accounts
+        .iter()
+        .map(|a| account_wire_size(a.data.len()))
+        .sum();
+    let before_bytes: usize = changes
+        .iter()
+        .filter_map(|c| c.before())
+        .map(|a| account_wire_size(a.data.len()))
+        .sum();
+    let estimate = 128 + account_bytes + before_bytes + changes.len() * (32 + 1 + 1);
+    let mut w = Writer::with_capacity(estimate);
 
     // Status.
     match outcome.error() {
@@ -709,7 +748,6 @@ pub fn serialize_outcome(outcome: &Outcome) -> Box<[u8]> {
     // Post-state accounts first (first-appearance order; existing accounts
     // only), so the consumer can resolve each change's `after` by address as it
     // reads the changes, without buffering.
-    let accounts = outcome.accounts();
     w.write_len(accounts.len());
     for account in accounts {
         w.write_account(account);
@@ -720,7 +758,6 @@ pub fn serialize_outcome(outcome: &Outcome) -> Box<[u8]> {
     // the post-state account written above at the same address, so it rides as a
     // single presence bit rather than a second copy; `after` is absent only when
     // the transaction removed the account.
-    let changes = outcome.account_changes();
     w.write_len(changes.len());
     for change in changes {
         w.write_pubkey(&change.address());
