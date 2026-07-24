@@ -1,0 +1,19 @@
+{
+  "name": "parallax-svm-win32-x64-msvc",
+  "version": "0.1.0",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "description": "parallax-svm native binary for Windows x64",
+  "license": "Apache-2.0 OR MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blueshift-gg/parallax.git"
+  },
+  "files": [
+    "parallax_svm_ffi.dll"
+  ]
+}

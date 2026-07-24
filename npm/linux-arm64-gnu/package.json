@@ -1,0 +1,19 @@
+{
+  "name": "parallax-svm-linux-arm64-gnu",
+  "version": "0.1.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "description": "parallax-svm native binary for Linux arm64 (glibc)",
+  "license": "Apache-2.0 OR MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blueshift-gg/parallax.git"
+  },
+  "files": [
+    "libparallax_svm_ffi.so"
+  ]
+}

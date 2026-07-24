@@ -1,3 +1,8 @@
 /target
 **/*.rs.bk
 .DS_Store
+
+# Staged native binaries: built per-platform and published, never committed.
+/npm/**/*.dylib
+/npm/**/*.so
+/npm/**/*.dll

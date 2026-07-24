@@ -1,0 +1,19 @@
+{
+  "name": "parallax-svm-darwin-arm64",
+  "version": "0.1.0",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "description": "parallax-svm native binary for macOS arm64",
+  "license": "Apache-2.0 OR MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blueshift-gg/parallax.git"
+  },
+  "files": [
+    "libparallax_svm_ffi.dylib"
+  ]
+}
