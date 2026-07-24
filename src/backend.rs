@@ -98,6 +98,30 @@ impl Backend {
             .expect("program artifact is a valid SBF ELF");
     }
 
+    /// Load a program under an explicit loader, matching the loader a dumped
+    /// mainnet program was deployed under so its compute-unit behavior is
+    /// faithful. Returns a message rather than panicking so a corrupt dumped ELF
+    /// surfaces as a clean error at the harness or FFI layer.
+    pub(crate) fn load_program_with_loader(
+        &mut self,
+        program_id: &Pubkey,
+        elf: &[u8],
+        loader: Pubkey,
+    ) -> Result<(), String> {
+        self.svm
+            .add_program_with_loader(*program_id, elf, loader)
+            .map_err(|error| format!("could not load dumped program {program_id}: {error:?}"))
+    }
+
+    /// Adopt a dumped slot's clock: set the runtime clock's `slot` and derived
+    /// Unix `timestamp` together. Used by `Dump::sync_clock`.
+    pub(crate) fn sync_clock(&mut self, slot: u64, unix_timestamp: i64) {
+        let mut clock: Clock = self.svm.get_sysvar();
+        clock.slot = slot;
+        clock.unix_timestamp = unix_timestamp;
+        self.svm.set_sysvar(&clock);
+    }
+
     pub(crate) fn set_account(&mut self, account: Account) {
         // A zero-lamport account is removed by LiteSVM, matching Solana's rule
         // that an empty account does not exist.
@@ -197,6 +221,14 @@ impl Backend {
         let mut clock: Clock = self.svm.get_sysvar();
         clock.unix_timestamp = timestamp;
         self.svm.set_sysvar(&clock);
+    }
+
+    /// The runtime clock's current `(slot, unix_timestamp)`, for asserting the
+    /// effect of `Dump::sync_clock` in tests.
+    #[cfg(test)]
+    pub(crate) fn clock_slot_and_timestamp(&self) -> (u64, i64) {
+        let clock: Clock = self.svm.get_sysvar();
+        (clock.slot, clock.unix_timestamp)
     }
 }
 

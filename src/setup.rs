@@ -1,5 +1,5 @@
 use {
-    crate::{backend::Backend, Pubkey, Test},
+    crate::{backend::Backend, dump::DumpTransport, Pubkey, Test},
     std::{
         env,
         error::Error,
@@ -26,6 +26,9 @@ pub struct TestBuilder {
     pub(super) program_path: Option<PathBuf>,
     pub(super) crate_name: Option<String>,
     pub(super) program_elf: Option<Vec<u8>>,
+    pub(super) rpc_url: Option<String>,
+    pub(super) project_dir: Option<String>,
+    pub(super) transport: Option<Box<dyn DumpTransport>>,
 }
 
 impl TestBuilder {
@@ -36,12 +39,43 @@ impl TestBuilder {
             program_path: None,
             crate_name: None,
             program_elf: None,
+            rpc_url: None,
+            project_dir: None,
+            transport: None,
         }
     }
 
     /// Set the transaction compute-unit limit for this world.
     pub fn compute_unit_limit(mut self, limit: u64) -> Self {
         self.compute_unit_limit = Some(limit);
+        self
+    }
+
+    /// Set the RPC endpoint that [`Dump`](crate::fixture::Dump) fixtures fetch
+    /// from on a store miss. This is code-only and set once; unset, it defaults
+    /// to the public mainnet-beta RPC. There is deliberately no environment
+    /// override — the endpoint lives in the test, not the ambient environment.
+    pub fn rpc(mut self, url: impl Into<String>) -> Self {
+        self.rpc_url = Some(url.into());
+        self
+    }
+
+    /// Set the project directory whose committed `.parallax/` store the world's
+    /// [`Dump`](crate::fixture::Dump) fixtures read and write. The
+    /// `#[parallax_test]` macro passes `CARGO_MANIFEST_DIR` here; unset, the
+    /// store is resolved from `CARGO_MANIFEST_DIR` or the nearest ancestor
+    /// `Cargo.toml`.
+    pub fn project_dir(mut self, dir: impl Into<String>) -> Self {
+        self.project_dir = Some(dir.into());
+        self
+    }
+
+    /// Inject the network transport used to fill the `Dump` store on a miss.
+    /// Internal seam for offline tests; ordinary tests use the built-in
+    /// transport selected by [`Self::rpc`].
+    #[cfg(test)]
+    pub(crate) fn transport(mut self, transport: Box<dyn DumpTransport>) -> Self {
+        self.transport = Some(transport);
         self
     }
 
@@ -95,49 +129,66 @@ impl TestBuilder {
 
     /// Load the program and start the world.
     pub fn build(self) -> Result<Test, SetupError> {
-        if let Some(elf) = self.program_elf {
+        let TestBuilder {
+            program_id,
+            compute_unit_limit,
+            program_path,
+            crate_name,
+            program_elf,
+            rpc_url,
+            project_dir,
+            transport,
+        } = self;
+        let rpc_url = rpc_url.unwrap_or_else(|| crate::dump::DEFAULT_RPC_URL.to_string());
+        let transport = transport.unwrap_or_else(crate::dump::default_transport);
+
+        if let Some(elf) = program_elf {
             let mut backend = Backend::new();
-            if let Some(limit) = self.compute_unit_limit {
+            if let Some(limit) = compute_unit_limit {
                 backend.set_compute_unit_limit(limit);
             }
             // No ELF (an empty program_bytes, or no_program) means a world with
             // just the runtime's built-ins; load nothing.
             if !elf.is_empty() {
-                backend.load_program(&self.program_id, &elf);
+                backend.load_program(&program_id, &elf);
             }
-            return Ok(Test {
+            return Ok(Test::from_parts(
                 backend,
-                program_id: self.program_id,
-                program_path: PathBuf::new(),
-                fresh_addresses: 0,
-            });
+                program_id,
+                PathBuf::new(),
+                rpc_url,
+                project_dir,
+                transport,
+            ));
         }
-        let path = match self.program_path {
+        let path = match program_path {
             Some(path) => path,
-            None => resolve_program_path(self.crate_name.as_deref())?,
+            None => resolve_program_path(crate_name.as_deref())?,
         };
         let elf = fs::read(&path).map_err(|source| SetupError::ReadProgram {
             path: path.clone(),
             source,
         })?;
         let mut backend = Backend::new();
-        if let Some(limit) = self.compute_unit_limit {
+        if let Some(limit) = compute_unit_limit {
             backend.set_compute_unit_limit(limit);
         }
-        backend.load_program(&self.program_id, &elf);
-        for program in discover_program_bundle(&path, self.program_id)? {
+        backend.load_program(&program_id, &elf);
+        for program in discover_program_bundle(&path, program_id)? {
             let elf = fs::read(&program.path).map_err(|source| SetupError::ReadBundledProgram {
                 path: program.path.clone(),
                 source,
             })?;
             backend.load_program(&program.id, &elf);
         }
-        Ok(Test {
+        Ok(Test::from_parts(
             backend,
-            program_id: self.program_id,
-            program_path: path,
-            fresh_addresses: 0,
-        })
+            program_id,
+            path,
+            rpc_url,
+            project_dir,
+            transport,
+        ))
     }
 }
 

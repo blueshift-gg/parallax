@@ -94,6 +94,7 @@ pub fn parallax_test(attr: TokenStream, item: TokenStream) -> TokenStream {
         #visibility fn #name() #output {
             let mut __parallax_test = #test_crate::Test::builder(#program_id)
                 .crate_name(env!("CARGO_PKG_NAME"))
+                .project_dir(env!("CARGO_MANIFEST_DIR"))
                 .build()
                 .unwrap_or_else(|error| ::core::panic!("{error}"));
             let #world_name: #world_type = &mut __parallax_test;

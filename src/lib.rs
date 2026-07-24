@@ -44,6 +44,7 @@
 
 mod accounts;
 mod backend;
+mod dump;
 pub mod fixture;
 mod outcome;
 mod setup;
@@ -92,7 +93,8 @@ pub mod prelude {
     pub use crate::{
         co_signers,
         fixture::{
-            AssociatedTokenAccount, Fixture, Mint, Program, TokenAccount, TokenProgram, Wallet,
+            AssociatedTokenAccount, Dump, Fixture, Mint, Program, TokenAccount, TokenProgram,
+            Wallet,
         },
         parallax_test, system_program, Account, AccountChange, AccountMeta, Instruction, Outcome,
         ProgramError, Pubkey, Snapshot, Test, DEFAULT_WALLET_LAMPORTS,
@@ -135,12 +137,14 @@ mod tests {
     }
 
     fn empty_test() -> Test {
-        Test {
-            backend: Backend::new(),
-            program_id: Pubkey::new_from_array([42; 32]),
-            program_path: PathBuf::new(),
-            fresh_addresses: 0,
-        }
+        Test::from_parts(
+            Backend::new(),
+            Pubkey::new_from_array([42; 32]),
+            PathBuf::new(),
+            crate::dump::DEFAULT_RPC_URL.to_string(),
+            None,
+            crate::dump::default_transport(),
+        )
     }
 
     #[test]

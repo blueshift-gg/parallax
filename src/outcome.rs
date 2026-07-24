@@ -25,6 +25,7 @@ pub struct Outcome {
     return_data: Vec<u8>,
     accounts: Vec<Account>,
     changes: Vec<AccountChange>,
+    hint: Option<String>,
 }
 
 impl Outcome {
@@ -61,11 +62,26 @@ impl Outcome {
             return_data: result.return_data,
             accounts,
             changes,
+            hint: None,
         }
+    }
+
+    /// Attach a guided-error hint (e.g. a missing dumped account), surfaced by
+    /// the failure assertions. See [`crate::fixture::Dump`].
+    pub(crate) fn with_hint(mut self, hint: Option<String>) -> Self {
+        self.hint = hint;
+        self
     }
 
     pub(crate) fn simulated_account(result: &ExecutionResult, address: &Pubkey) -> Option<Account> {
         result.account(address).cloned()
+    }
+
+    /// The guided-error hint attached to this outcome, if any. Exposed for the
+    /// FFI wire and the failure assertions; not part of the stable surface.
+    #[doc(hidden)]
+    pub fn hint(&self) -> Option<&str> {
+        self.hint.as_deref()
     }
 
     /// Whether execution succeeded.
@@ -270,10 +286,16 @@ impl Outcome {
     }
 
     fn formatted_logs(&self) -> String {
-        if self.logs.is_empty() {
-            return String::new();
+        let mut formatted = if self.logs.is_empty() {
+            String::new()
+        } else {
+            format!("\nprogram logs:\n  {}", self.logs.join("\n  "))
+        };
+        if let Some(hint) = &self.hint {
+            formatted.push_str("\nhint: ");
+            formatted.push_str(hint);
         }
-        format!("\nprogram logs:\n  {}", self.logs.join("\n  "))
+        formatted
     }
 }
 
@@ -315,6 +337,7 @@ mod tests {
             return_data: vec![9, 8, 7],
             accounts: Vec::new(),
             changes: Vec::new(),
+            hint: None,
         }
     }
 
@@ -359,6 +382,7 @@ mod tests {
             return_data: Vec::new(),
             accounts: vec![account],
             changes: Vec::new(),
+            hint: None,
         }
     }
 

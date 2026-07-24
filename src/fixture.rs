@@ -313,6 +313,121 @@ impl Fixture for AssociatedTokenAccount {
     }
 }
 
+/// Copy real accounts (or a real program) from a live cluster into the world.
+///
+/// `Dump` fills a committed `.parallax/` store next to the consuming project's
+/// manifest, so the first run fetches once and every later run is fully offline
+/// and deterministic. The RPC endpoint comes from
+/// [`Test::builder(id).rpc(url)`](crate::TestBuilder::rpc); unset, it defaults to
+/// the public mainnet-beta RPC.
+///
+/// ```rust,ignore
+/// use parallax_svm::prelude::*;
+///
+/// #[parallax_test]
+/// fn against_real_state(test: &mut Test) {
+///     // Fetched once at one slot, then served from `.parallax/` offline.
+///     let [pool, oracle] = test.add(Dump::accounts([POOL, ORACLE]));
+///     test.add(Dump::program(AMM_PROGRAM));
+///     test.send(SwapInstruction { pool, oracle }).succeeds();
+/// }
+/// ```
+///
+/// [`Dump::accounts`] returns the same addresses it was given, in the same
+/// arity, so a test destructures them directly (`let [a, b] = ...`).
+/// [`Dump::program`] dumps a program's executable account and its loader-v3
+/// programdata coherently and loads it as a usable program.
+/// [`DumpAccounts::sync_clock`]/[`DumpProgram::sync_clock`] opt the world into
+/// adopting the dumped slot's clock. [`Dump::refresh_all`] re-fetches every
+/// stored entry in one coherent batch.
+pub struct Dump;
+
+impl Dump {
+    /// Dump a fixed set of accounts. Returns the same addresses, so the test
+    /// reads them straight back: `let [a, b] = test.add(Dump::accounts([A, B]));`.
+    pub fn accounts<const N: usize>(addresses: [Pubkey; N]) -> DumpAccounts<N> {
+        DumpAccounts {
+            addresses,
+            sync_clock: false,
+        }
+    }
+
+    /// Dump a program (its executable account and, for the upgradeable loader,
+    /// its programdata) and load it as a usable program. Returns the program id.
+    pub fn program(program_id: Pubkey) -> DumpProgram {
+        DumpProgram {
+            program_id,
+            sync_clock: false,
+        }
+    }
+
+    /// Re-fetch every entry already in the store in one coherent batch, refresh
+    /// their slots, and reinstall them. Returns the refreshed addresses. Use it
+    /// to collapse a world whose dumped entries drifted across many slots back
+    /// onto a single recent slot.
+    pub fn refresh_all() -> DumpRefresh {
+        DumpRefresh
+    }
+}
+
+/// The [`Dump::accounts`] fixture: a fixed-arity set of addresses to dump.
+pub struct DumpAccounts<const N: usize> {
+    addresses: [Pubkey; N],
+    sync_clock: bool,
+}
+
+impl<const N: usize> DumpAccounts<N> {
+    /// Adopt the dumped slot's clock (its slot and a timestamp derived from it)
+    /// for this world. Opt-in; off by default.
+    pub fn sync_clock(mut self) -> Self {
+        self.sync_clock = true;
+        self
+    }
+}
+
+impl<const N: usize> Fixture for DumpAccounts<N> {
+    type Output = [Pubkey; N];
+
+    fn install(self, test: &mut Test) -> Self::Output {
+        test.dump_accounts_native(&self.addresses, self.sync_clock);
+        self.addresses
+    }
+}
+
+/// The [`Dump::program`] fixture: a program to dump and load.
+pub struct DumpProgram {
+    program_id: Pubkey,
+    sync_clock: bool,
+}
+
+impl DumpProgram {
+    /// Adopt the dumped slot's clock for this world. Opt-in; off by default.
+    pub fn sync_clock(mut self) -> Self {
+        self.sync_clock = true;
+        self
+    }
+}
+
+impl Fixture for DumpProgram {
+    type Output = Pubkey;
+
+    fn install(self, test: &mut Test) -> Self::Output {
+        test.dump_program_native(self.program_id, self.sync_clock);
+        self.program_id
+    }
+}
+
+/// The [`Dump::refresh_all`] fixture: re-fetch every stored entry at one slot.
+pub struct DumpRefresh;
+
+impl Fixture for DumpRefresh {
+    type Output = Vec<Pubkey>;
+
+    fn install(self, test: &mut Test) -> Self::Output {
+        test.refresh_all_native()
+    }
+}
+
 /// A program to preload for cross-program invocations.
 pub struct Program<'a> {
     id: Pubkey,

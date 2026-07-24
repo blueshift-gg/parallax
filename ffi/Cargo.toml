@@ -23,7 +23,11 @@ crate-type = ["cdylib", "rlib"]
 # boundary (`Pubkey`, `Account`, `Instruction`, `AccountMeta`, `ProgramError`,
 # `Outcome`, fixtures) is used through the core's re-exports, so the FFI never
 # pins a `solana-*` version of its own and cannot drift from the core's line.
-parallax-svm = { path = ".." }
+# `default-features = false` drops the core's `native-rpc` transport (ureq +
+# rustls): the cdylib carries no TLS stack and opens no sockets. `Dump` misses
+# are fetched by the TypeScript shell's JS `fetch` and handed back through the
+# two-phase `parallax_dump_plan` / `parallax_dump_commit` wire (see wire.rs).
+parallax-svm = { path = "..", default-features = false }
 
 [build-dependencies]
 cbindgen = "0.28"

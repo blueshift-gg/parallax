@@ -16,6 +16,16 @@ include = ["/src/**", "/README.md", "/LICENSE-APACHE", "/LICENSE-MIT"]
 name = "parallax_svm"
 doctest = true
 
+[features]
+# `native-rpc` bundles a minimal HTTPS JSON-RPC transport (ureq + rustls) so a
+# native Rust test can fill the `Dump` store from mainnet on a miss without any
+# extra wiring. It is a default feature for the crate, but the FFI cdylib
+# depends on the core with `default-features = false`: the TypeScript harness
+# supplies its own JS `fetch` transport, so the shipped binary carries no TLS
+# stack and never opens a socket (see the boundary note in `src/dump.rs`).
+default = ["native-rpc"]
+native-rpc = ["dep:ureq"]
+
 [dependencies]
 base64 = "0.22"
 litesvm = { version = "0.15", features = ["persistence-internal"] }
@@ -46,6 +56,12 @@ solana-signature = "3.4"
 solana-transaction = "4.1"
 solana-transaction-error = "3.3"
 spl-token = { version = "=9.0.0", default-features = false, features = ["no-entrypoint"] }
+# Optional native transport for `Dump` misses: a small HTTPS JSON-RPC client.
+# ureq is the lean choice — one blocking `POST`, rustls for TLS (mainnet RPC is
+# HTTPS, so a hand-rolled std::net client cannot reach it), no async runtime and
+# no heavyweight Solana SDK. Gated behind `native-rpc` and excluded from the FFI
+# build entirely.
+ureq = { version = "2.12", optional = true, default-features = false, features = ["tls"] }
 # wincode 0.5 is the serialization substrate: a standard, not a framework. The
 # typed-state API (`read`/`read_at`/`write`/`has_state`) decodes and encodes an
 # account's data with wincode's `DefaultConfig`.

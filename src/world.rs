@@ -2,6 +2,7 @@ use {
     crate::{
         accounts,
         backend::Backend,
+        dump::DumpTransport,
         fixture::{Fixture, TokenProgram},
         outcome::{mint_supply, token_amount, TrackedAccount},
         Account, Instruction, Outcome, Pubkey, SetupError, TestBuilder,
@@ -23,9 +24,47 @@ pub struct Test {
     pub(super) program_id: Pubkey,
     pub(super) program_path: std::path::PathBuf,
     pub(super) fresh_addresses: u64,
+    /// RPC endpoint used to fill the `Dump` store on a miss.
+    pub(super) rpc_url: String,
+    /// Project directory whose `.parallax/` store this world uses, when set
+    /// explicitly (by the `#[parallax_test]` macro or the builder).
+    pub(super) project_dir: Option<String>,
+    /// Network transport for `Dump` misses (the built-in HTTPS client natively;
+    /// unused on the FFI path, which resolves through the plan/commit wire).
+    pub(super) transport: Box<dyn DumpTransport>,
+    /// Addresses installed by a `Dump`, tracked for guided errors.
+    pub(super) dumped_addresses: Vec<Pubkey>,
+    /// Observed slots of installed dump entries, tracked for mixed-slot
+    /// coherence warnings.
+    pub(super) dumped_slots: Vec<u64>,
+    /// Whether the mixed-slot coherence warning has already fired for this world.
+    pub(super) dump_warned: bool,
 }
 
 impl Test {
+    /// Assemble a world from its loaded backend and its dump configuration.
+    pub(crate) fn from_parts(
+        backend: Backend,
+        program_id: Pubkey,
+        program_path: std::path::PathBuf,
+        rpc_url: String,
+        project_dir: Option<String>,
+        transport: Box<dyn DumpTransport>,
+    ) -> Self {
+        Self {
+            backend,
+            program_id,
+            program_path,
+            fresh_addresses: 0,
+            rpc_url,
+            project_dir,
+            transport,
+            dumped_addresses: Vec::new(),
+            dumped_slots: Vec::new(),
+            dump_warned: false,
+        }
+    }
+
     /// Load a compiled program by discovering its artifact.
     ///
     /// # Panics
@@ -435,7 +474,23 @@ impl Test {
                     .or_else(|| account.before.clone())
             };
         }
-        Outcome::from_backend(result, tracked)
+
+        // Guided error: in a world that dumped mainnet accounts, a failure on an
+        // account the world never installed is very often a missing dump. Name
+        // the first such read-only account (writable → init target, signer →
+        // funded co-signer, so neither is "missing"). Non-noisy: only when the
+        // world has dumps and the transaction actually failed.
+        let hint = (!succeeded && self.has_dumps())
+            .then(|| {
+                tracked
+                    .iter()
+                    .find(|account| {
+                        account.before.is_none() && !account.writable && !account.signer
+                    })
+                    .map(|account| account.address)
+            })
+            .flatten();
+        Outcome::from_backend(result, tracked).with_hint(crate::dump::missing_account_hint(hint))
     }
 
     fn required_account(&self, address: Pubkey) -> Account {
