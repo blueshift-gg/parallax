@@ -1,0 +1,69 @@
+[package]
+name = "parallax-svm"
+description = "Parallax: a fixture-based testing harness for Solana programs on LiteSVM"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["solana", "testing", "svm", "litesvm", "blockchain"]
+categories = ["development-tools", "development-tools::testing"]
+include = ["/src/**", "/README.md", "/LICENSE-APACHE", "/LICENSE-MIT"]
+
+[lib]
+name = "parallax_svm"
+doctest = true
+
+[dependencies]
+base64 = "0.22"
+litesvm = { version = "0.15", features = ["persistence-internal"] }
+parallax-svm-derive = { path = "derive", version = "=0.1.0" }
+serde_json = "1"
+solana-account = "4.3"
+# wincode-line skew (see Cargo.lock): litesvm 0.15 is built against the solana
+# sysvar crates that still use wincode 0.5.x. Their next patch releases bump to
+# wincode 0.6.0, whose `SchemaRead`/`SchemaWrite`/`Reader` traits are a distinct
+# incompatible line — mixing the two makes solana-nonce's derive fail to
+# compile. `solana-clock = "=3.1.1"` is the one such crate depended on directly;
+# the rest are held on the wincode-0.5 line by precise Cargo.lock entries
+# (solana-address 2.6.1, solana-hash 4.5.0, solana-nonce 3.2.0, solana-message
+# 4.3.0, solana-short-vec 3.2.2, solana-last-restart-slot 3.1.0,
+# solana-slot-history 3.1.0, solana-epoch-rewards 3.1.0, solana-slot-hashes
+# 3.1.0), matching litesvm 0.15's own lockfile. wincode resolves to a single
+# 0.5.x — verify with `cargo tree -i wincode`.
+solana-clock = "=3.1.1"
+solana-compute-budget = "4.1"
+solana-fee-structure = "3"
+solana-instruction = "3.4"
+solana-instruction-error = "2.4"
+solana-message = "4"
+solana-pubkey = { version = "4.2", features = ["curve25519"] }
+solana-rent = "4.2"
+solana-sdk-ids = "3.1"
+solana-signature = "3.4"
+solana-transaction = "4.1"
+solana-transaction-error = "3.3"
+spl-token = { version = "=9.0.0", default-features = false, features = ["no-entrypoint"] }
+# wincode 0.5 is the serialization substrate: a standard, not a framework. The
+# typed-state API (`read`/`read_at`/`write`/`has_state`) decodes and encodes an
+# account's data with wincode's `DefaultConfig`.
+wincode = "0.5"
+
+[dev-dependencies]
+tempfile = "3"
+# The derive feature is used only by the crate's own unit tests, which define
+# small `SchemaRead`/`SchemaWrite` account types to exercise the typed-state API.
+wincode = { version = "0.5", features = ["derive"] }
+
+[workspace]
+members = ["derive"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/blueshift-gg/parallax"
+homepage = "https://github.com/blueshift-gg/parallax"
+authors = ["Leonardo Donatacci <leo@blueshift.gg>", "Dean Little <dean@blueshift.gg>"]
