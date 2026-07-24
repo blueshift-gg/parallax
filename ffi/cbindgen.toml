@@ -1,0 +1,16 @@
+language = "C"
+include_guard = "PARALLAX_SVM_H"
+tab_width = 4
+style = "both"
+cpp_compat = true
+
+sys_includes = ["stdint.h", "stdbool.h", "stddef.h"]
+
+[parse]
+# The opaque handle is `parallax_svm::Test`; with dependency parsing off,
+# cbindgen emits it as an opaque forward declaration, which is exactly the
+# handle contract callers see.
+parse_deps = false
+
+[enum]
+rename_variants = "ScreamingSnakeCase"

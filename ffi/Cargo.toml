@@ -1,0 +1,29 @@
+[package]
+name = "parallax-svm-ffi"
+description = "C-ABI transport for the parallax-svm test harness, consumed over FFI (e.g. koffi)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+# Not a library for crates.io: this is the native transport behind the
+# `parallax-svm` npm package, shipped as a per-platform prebuilt binary.
+publish = false
+
+[lib]
+name = "parallax_svm_ffi"
+# `cdylib` is the shipped artifact (libparallax_svm_ffi.{dylib,so,dll}); `rlib`
+# lets the in-crate round-trip and end-to-end tests link the extern functions
+# in-process.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The sole dependency is the core harness. Every Solana type crossing the
+# boundary (`Pubkey`, `Account`, `Instruction`, `AccountMeta`, `ProgramError`,
+# `Outcome`, fixtures) is used through the core's re-exports, so the FFI never
+# pins a `solana-*` version of its own and cannot drift from the core's line.
+parallax-svm = { path = ".." }
+
+[build-dependencies]
+cbindgen = "0.28"

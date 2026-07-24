@@ -58,7 +58,7 @@ tempfile = "3"
 wincode = { version = "0.5", features = ["derive"] }
 
 [workspace]
-members = ["derive"]
+members = ["derive", "ffi"]
 
 [workspace.package]
 version = "0.1.0"
