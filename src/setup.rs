@@ -69,6 +69,10 @@ impl TestBuilder {
     /// ignores [`Self::program_path`], [`Self::crate_name`], and
     /// [`PROGRAM_PATH_ENV`]. Additional programs are added afterwards with
     /// [`Test::load_program`](crate::Test::load_program).
+    ///
+    /// Empty bytes build a world with no primary program (only the runtime's
+    /// built-ins, e.g. the SPL programs), for tests that exercise those without
+    /// a program of their own.
     pub fn program_bytes(mut self, elf: impl Into<Vec<u8>>) -> Self {
         self.program_elf = Some(elf.into());
         self
@@ -81,7 +85,11 @@ impl TestBuilder {
             if let Some(limit) = self.compute_unit_limit {
                 backend.set_compute_unit_limit(limit);
             }
-            backend.load_program(&self.program_id, &elf);
+            // Empty bytes mean "no primary program": build a world with just the
+            // runtime's built-ins.
+            if !elf.is_empty() {
+                backend.load_program(&self.program_id, &elf);
+            }
             return Ok(Test {
                 backend,
                 program_id: self.program_id,

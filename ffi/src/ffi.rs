@@ -35,8 +35,10 @@ pub extern "C" fn parallax_last_error() -> *const c_char {
 // ---------------------------------------------------------------------------
 
 /// Build a world for `program_id` from in-memory ELF `elf`, optionally pinning a
-/// transaction compute-unit limit. Returns an opaque handle, or null on failure
-/// (`parallax_last_error` describes it). Free with [`parallax_free`].
+/// transaction compute-unit limit. Pass `elf_len == 0` (with a null or empty
+/// `elf`) to build a world with no primary program — only the runtime's
+/// built-ins (e.g. the SPL programs). Returns an opaque handle, or null on
+/// failure (`parallax_last_error` describes it). Free with [`parallax_free`].
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_new(
     program_id: *const [u8; 32],
@@ -46,14 +48,19 @@ pub extern "C" fn parallax_new(
     compute_unit_limit: u64,
 ) -> *mut Test {
     clear_last_error();
-    if program_id.is_null() || elf.is_null() {
+    // A null `elf` is only valid for the no-program case (`elf_len == 0`).
+    if program_id.is_null() || (elf.is_null() && elf_len != 0) {
         set_last_error("null pointer argument");
         return ptr::null_mut();
     }
     let built = catch_unwind(AssertUnwindSafe(|| {
         let id = Pubkey::new_from_array(unsafe { *program_id });
-        let elf = unsafe { slice::from_raw_parts(elf, elf_len as usize) };
-        let mut builder = Test::builder(id).program_bytes(elf.to_vec());
+        let elf = if elf_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { slice::from_raw_parts(elf, elf_len as usize) }.to_vec()
+        };
+        let mut builder = Test::builder(id).program_bytes(elf);
         if has_compute_unit_limit {
             builder = builder.compute_unit_limit(compute_unit_limit);
         }

@@ -53,8 +53,10 @@ const char *parallax_last_error(void);
 
 /**
  * Build a world for `program_id` from in-memory ELF `elf`, optionally pinning a
- * transaction compute-unit limit. Returns an opaque handle, or null on failure
- * (`parallax_last_error` describes it). Free with [`parallax_free`].
+ * transaction compute-unit limit. Pass `elf_len == 0` (with a null or empty
+ * `elf`) to build a world with no primary program — only the runtime's
+ * built-ins (e.g. the SPL programs). Returns an opaque handle, or null on
+ * failure (`parallax_last_error` describes it). Free with [`parallax_free`].
  */
 Test *parallax_new(const uint8_t (*program_id)[32],
                    const uint8_t *elf,
