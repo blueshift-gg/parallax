@@ -23,9 +23,10 @@ mod tests {
     use crate::ffi::*;
     use parallax_svm::{system_program, Pubkey};
 
-    /// Locate a program artifact to load. In-process execution requires a valid
-    /// SBF ELF for [`parallax_new`]; the transfer itself only touches the
-    /// built-in system program, so any valid program serves. Gated on
+    /// Locate a program artifact to load. Loading a primary program through
+    /// [`parallax_new`] requires a valid SBF ELF (program-less worlds pass
+    /// `elf_len == 0` instead); the transfer itself only touches the built-in
+    /// system program, so any valid program serves. Gated on
     /// `PARALLAX_PROGRAM_PATH` so the suite stays green without an artifact.
     fn program_elf() -> Option<Vec<u8>> {
         let path = std::env::var_os("PARALLAX_PROGRAM_PATH")?;
