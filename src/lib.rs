@@ -245,6 +245,48 @@ mod tests {
         assert_ne!(bob, carol);
     }
 
+    // The generated-address plural (`Mint::accounts::<N>()`) installs N distinct
+    // mints with one shared config — the plural for a non-`Copy` fixture, which
+    // the `[expr; N]` array-repeat syntax cannot express.
+    #[test]
+    fn accounts_const_generic_installs_n_distinct_fresh_fixtures() {
+        let mut test = empty_test();
+
+        let [first, second] = test.add(Mint::new().supply(1_000).accounts::<2>());
+        assert_ne!(first, second);
+        assert_eq!(test.supply(first), 1_000);
+        assert_eq!(test.supply(second), 1_000);
+    }
+
+    // The pinned-address plural (`Wallet::accounts([..])` / `TokenAccount::accounts`)
+    // applies one config at each named address, mirroring `Dump::accounts`.
+    #[test]
+    fn accounts_array_pins_a_fixture_at_every_address() {
+        let mut test = empty_test();
+        let a = Pubkey::new_from_array([10; 32]);
+        let b = Pubkey::new_from_array([11; 32]);
+
+        let [alice, bob] = test.add(Wallet::accounts([a, b]).fund(5_000));
+        assert_eq!(alice, a);
+        assert_eq!(bob, b);
+        assert_eq!(test.lamports(a), 5_000);
+        assert_eq!(test.lamports(b), 5_000);
+
+        // TokenAccount::accounts carries mint/owner/amount to each pinned address.
+        let mint = test.add(Mint::new().supply(1_000));
+        let owner = test.add(Wallet::new());
+        let ta_a = Pubkey::new_from_array([20; 32]);
+        let ta_b = Pubkey::new_from_array([21; 32]);
+        let [first, second] = test.add(
+            TokenAccount::new(mint, owner)
+                .amount(42)
+                .accounts([ta_a, ta_b]),
+        );
+        assert_eq!([first, second], [ta_a, ta_b]);
+        assert_eq!(test.tokens(ta_a), 42);
+        assert_eq!(test.tokens(ta_b), 42);
+    }
+
     #[test]
     fn applications_can_define_protocol_fixtures() {
         struct ProtocolFixture;

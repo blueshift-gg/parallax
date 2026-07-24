@@ -28,6 +28,17 @@ impl<F: Fixture, const N: usize> Fixture for [F; N] {
     }
 }
 
+/// Install `N` clones of a generated-address fixture, one shared configuration,
+/// returning the outputs as `[Output; N]`. The mechanism behind the const-generic
+/// plurals (e.g. [`Mint::accounts`]); each clone receives its own placement, so a
+/// bare [`Mint`] yields `N` *distinct* accounts.
+fn install_clones<F: Fixture + Clone, const N: usize>(
+    fixture: &F,
+    test: &mut Test,
+) -> [F::Output; N] {
+    core::array::from_fn(|_| fixture.clone().install(test))
+}
+
 impl Fixture for Account {
     type Output = Pubkey;
 
@@ -64,6 +75,46 @@ impl Wallet {
     pub fn fund(mut self, lamports: u64) -> Self {
         self.lamports = lamports;
         self
+    }
+
+    /// Install one wallet at *each* of `addresses`, returning them in order —
+    /// the plural of [`Wallet`], mirroring [`Dump::accounts`]:
+    /// `let [alice, bob] = test.add(Wallet::accounts([ALICE, BOB]).fund(5_000))`.
+    ///
+    /// Configure the shared balance on the returned builder; it applies to every
+    /// wallet. For `N` *fresh* wallets, `[Wallet::new().fund(7); N]` already
+    /// works ([`Wallet`] is `Copy`).
+    pub fn accounts<const N: usize>(addresses: [Pubkey; N]) -> Wallets<N> {
+        Wallets {
+            addresses,
+            lamports: crate::DEFAULT_WALLET_LAMPORTS,
+        }
+    }
+}
+
+/// The [`Wallet::accounts`] fixture: one wallet per pinned address, one config.
+#[derive(Debug, Clone)]
+pub struct Wallets<const N: usize> {
+    addresses: [Pubkey; N],
+    lamports: u64,
+}
+
+impl<const N: usize> Wallets<N> {
+    /// Fund every wallet with an exact lamport balance, replacing the default.
+    pub fn fund(mut self, lamports: u64) -> Self {
+        self.lamports = lamports;
+        self
+    }
+}
+
+impl<const N: usize> Fixture for Wallets<N> {
+    type Output = [Pubkey; N];
+
+    fn install(self, test: &mut Test) -> Self::Output {
+        for address in &self.addresses {
+            test.set_account(accounts::system_account(*address, self.lamports));
+        }
+        self.addresses
     }
 }
 
@@ -177,6 +228,30 @@ impl Mint {
         self.holders.extend(holders);
         self
     }
+
+    /// Install `N` fresh mints with this configuration, returning their addresses
+    /// as `[Pubkey; N]`: `let [a, b] = test.add(Mint::new().supply(1_000).accounts::<2>())`.
+    ///
+    /// The plural of [`Mint`], mirroring [`Dump::accounts`]. Each mint is placed
+    /// at its own deterministic address, so the `N` addresses are distinct. This
+    /// is the plural for [`Mint`], which is not `Copy` and so cannot use the
+    /// `[expr; N]` array-repeat syntax; configuration is applied first and shared
+    /// by every mint.
+    pub fn accounts<const N: usize>(self) -> Mints<N> {
+        Mints(self)
+    }
+}
+
+/// The [`Mint::accounts`] fixture: `N` fresh mints sharing one configuration.
+#[derive(Debug, Clone)]
+pub struct Mints<const N: usize>(Mint);
+
+impl<const N: usize> Fixture for Mints<N> {
+    type Output = [Pubkey; N];
+
+    fn install(self, test: &mut Test) -> Self::Output {
+        install_clones(&self.0, test)
+    }
 }
 
 impl Default for Mint {
@@ -248,6 +323,43 @@ impl TokenAccount {
     pub fn token_program(mut self, token_program: TokenProgram) -> Self {
         self.token_program = token_program;
         self
+    }
+
+    /// Install one token account (this mint, owner, amount, token program) at
+    /// *each* of `addresses`, returning them in order — the plural of
+    /// [`TokenAccount`], mirroring [`Dump::accounts`]. Configuration comes first
+    /// (through [`TokenAccount::new`] and the builders); the addresses last. For
+    /// `N` *fresh* token accounts, `[TokenAccount::new(mint, owner); N]` already
+    /// works ([`TokenAccount`] is `Copy`).
+    pub fn accounts<const N: usize>(self, addresses: [Pubkey; N]) -> TokenAccounts<N> {
+        TokenAccounts {
+            account: self,
+            addresses,
+        }
+    }
+}
+
+/// The [`TokenAccount::accounts`] fixture: one token account per pinned address.
+#[derive(Debug, Clone)]
+pub struct TokenAccounts<const N: usize> {
+    account: TokenAccount,
+    addresses: [Pubkey; N],
+}
+
+impl<const N: usize> Fixture for TokenAccounts<N> {
+    type Output = [Pubkey; N];
+
+    fn install(self, test: &mut Test) -> Self::Output {
+        for address in &self.addresses {
+            test.set_account(accounts::token_program_account(
+                *address,
+                self.account.mint,
+                self.account.owner,
+                self.account.amount,
+                self.account.token_program.id(),
+            ));
+        }
+        self.addresses
     }
 }
 
