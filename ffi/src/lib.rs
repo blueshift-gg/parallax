@@ -433,3 +433,108 @@ mod tests {
         assert!(!parallax_last_error().is_null());
     }
 }
+
+// Micro-benchmarks for the wire codec — the new hot path between the core send
+// path and the TypeScript shell. `#[ignore]` so they never run in the ordinary
+// suite; measure with `cargo test --release -- --ignored --nocapture bench_`.
+#[cfg(test)]
+mod bench {
+    use {
+        crate::wire,
+        parallax_svm::{
+            fixture::Wallet, system_program, Account, AccountMeta, Instruction, Outcome, Pubkey,
+            Test,
+        },
+        std::time::Instant,
+    };
+
+    /// Time `iters` iterations of `body` and print nanoseconds per iteration.
+    fn report(name: &str, iters: u32, mut body: impl FnMut()) {
+        for _ in 0..(iters / 8).max(1) {
+            body();
+        }
+        let start = Instant::now();
+        for _ in 0..iters {
+            body();
+        }
+        let per = start.elapsed().as_nanos() as f64 / f64::from(iters);
+        println!("{name}: {per:.0} ns/iter ({iters} iters)");
+    }
+
+    /// A System `Transfer` instruction chain encoded as the shell would send it.
+    fn transfer_chain_wire(from: Pubkey, to: Pubkey, lamports: u64) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&1u32.to_le_bytes()); // num_instructions
+        buf.extend_from_slice(system_program::ID.as_ref());
+        let mut data = vec![2u8, 0, 0, 0];
+        data.extend_from_slice(&lamports.to_le_bytes());
+        buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&data);
+        buf.extend_from_slice(&2u32.to_le_bytes()); // num_metas
+        buf.extend_from_slice(from.as_ref());
+        buf.extend_from_slice(&[1, 1]);
+        buf.extend_from_slice(to.as_ref());
+        buf.extend_from_slice(&[0, 1]);
+        buf
+    }
+
+    /// Build a real committed `Outcome` whose recipient carries `data_len` bytes,
+    /// so the bundle exercises a large writable account crossing the wire.
+    fn transfer_outcome(data_len: usize) -> Outcome {
+        let mut test = Test::builder(Pubkey::new_from_array([0; 32]))
+            .no_program()
+            .build()
+            .expect("program-less world builds");
+        let payer = test.add(Wallet::new().fund(u64::MAX));
+        let recipient = Pubkey::new_from_array([9; 32]);
+        if data_len > 0 {
+            // A system-owned account the transfer credits; its data rides the
+            // bundle in both the post-state accounts and the account change.
+            test.set_account(Account::new(
+                recipient,
+                system_program::ID,
+                1_000_000,
+                vec![7; data_len],
+            ));
+        }
+        let mut ix_data = vec![2u8, 0, 0, 0];
+        ix_data.extend_from_slice(&1u64.to_le_bytes());
+        let ix = Instruction {
+            program_id: system_program::ID,
+            accounts: vec![
+                AccountMeta::new(payer, true),
+                AccountMeta::new(recipient, false),
+            ],
+            data: ix_data,
+        };
+        test.send(ix)
+    }
+
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_wire_decode_instructions() {
+        let chain = transfer_chain_wire(
+            Pubkey::new_from_array([1; 32]),
+            Pubkey::new_from_array([2; 32]),
+            1,
+        );
+        report("wire_decode_instructions_transfer", 200_000, || {
+            let ixs = wire::deserialize_instructions(&chain).unwrap();
+            std::hint::black_box(ixs.len());
+        });
+    }
+
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_wire_encode_outcome() {
+        // Small (empty recipient), medium (token-account-sized), and large (10 KiB)
+        // writable accounts, so the encode cost's scaling with account data — the
+        // bundle's dominant term — is visible.
+        for (label, data_len) in [("small_0b", 0), ("medium_165b", 165), ("large_10k", 10_240)] {
+            let outcome = transfer_outcome(data_len);
+            report(&format!("wire_encode_outcome_{label}"), 100_000, || {
+                std::hint::black_box(wire::serialize_outcome(&outcome).len());
+            });
+        }
+    }
+}
