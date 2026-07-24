@@ -1,8 +1,8 @@
 use {
     crate::{
+        accounts,
         backend::Backend,
         fixture::{Fixture, TokenProgram},
-        fixtures,
         outcome::{mint_supply, token_amount, TrackedAccount},
         Account, Instruction, Outcome, Pubkey, SetupError, TestBuilder,
     },
@@ -183,7 +183,7 @@ impl Test {
     {
         let data = wincode::serialize(&value)
             .unwrap_or_else(|error| panic!("write {}: {error:?}", core::any::type_name::<T>()));
-        self.set_account(fixtures::program_account(address, owner, data));
+        self.set_account(accounts::program_account(address, owner, data));
         address
     }
 
@@ -314,9 +314,9 @@ impl Test {
                 continue;
             }
             if account.writable {
-                inputs.push(fixtures::empty_account(account.address));
+                inputs.push(accounts::empty_account(account.address));
             } else if account.signer {
-                inputs.push(fixtures::system_account(
+                inputs.push(accounts::system_account(
                     account.address,
                     DEFAULT_WALLET_LAMPORTS,
                 ));

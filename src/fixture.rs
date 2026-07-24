@@ -1,6 +1,6 @@
 //! Composable fixtures for common Solana accounts and programs.
 
-use crate::{fixtures, Account, Pubkey, Test, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID};
+use crate::{accounts, Account, Pubkey, Test, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID};
 
 /// State that can install itself into a test world.
 ///
@@ -75,7 +75,7 @@ impl Fixture for Wallet {
 
     fn install(self, test: &mut Test) -> Self::Output {
         let address = self.address.unwrap_or_else(|| test.fresh_address());
-        test.set_account(fixtures::system_account(address, self.lamports));
+        test.set_account(accounts::system_account(address, self.lamports));
         address
     }
 }
@@ -187,7 +187,7 @@ impl Fixture for Mint {
 
     fn install(self, test: &mut Test) -> Self::Output {
         let address = test.fresh_address();
-        test.set_account(fixtures::token_program_mint_account(
+        test.set_account(accounts::token_program_mint_account(
             address,
             self.authority,
             self.freeze_authority,
@@ -196,7 +196,7 @@ impl Fixture for Mint {
             self.token_program.id(),
         ));
         for (owner, amount) in self.holders {
-            test.set_account(fixtures::associated_token_account_with_program(
+            test.set_account(accounts::associated_token_account_with_program(
                 owner,
                 address,
                 amount,
@@ -253,7 +253,7 @@ impl Fixture for TokenAccount {
 
     fn install(self, test: &mut Test) -> Self::Output {
         let address = self.address.unwrap_or_else(|| test.fresh_address());
-        test.set_account(fixtures::token_program_account(
+        test.set_account(accounts::token_program_account(
             address,
             self.mint,
             self.owner,
@@ -301,7 +301,7 @@ impl Fixture for AssociatedTokenAccount {
     type Output = Pubkey;
 
     fn install(self, test: &mut Test) -> Self::Output {
-        let account = fixtures::associated_token_account_with_program(
+        let account = accounts::associated_token_account_with_program(
             self.owner,
             self.mint,
             self.amount,

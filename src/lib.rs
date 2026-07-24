@@ -28,9 +28,9 @@
 
 #![warn(missing_docs)]
 
+mod accounts;
 mod backend;
 pub mod fixture;
-mod fixtures;
 mod outcome;
 mod setup;
 mod types;

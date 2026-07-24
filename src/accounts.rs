@@ -1,3 +1,9 @@
+//! Internal constructors for the raw [`Account`] values the builder fixtures
+//! and the send backfill install. Kept apart from the public [`fixture`] module:
+//! this is the account-bytes factory, not the builder API.
+//!
+//! [`fixture`]: crate::fixture
+
 use {
     crate::{system_program, Account, Pubkey, SPL_ASSOCIATED_TOKEN_PROGRAM_ID},
     solana_rent::Rent,
@@ -7,18 +13,18 @@ use {
     },
 };
 
-/// Create a system-owned account with the supplied balance.
-pub fn system_account(address: Pubkey, lamports: u64) -> Account {
+/// A system-owned account holding `lamports` and no data.
+pub(crate) fn system_account(address: Pubkey, lamports: u64) -> Account {
     Account::new(address, system_program::ID, lamports, Vec::new())
 }
 
-/// Create an empty system-owned account, suitable for an init target.
-pub fn empty_account(address: Pubkey) -> Account {
+/// An empty system-owned account, suitable for an init target.
+pub(crate) fn empty_account(address: Pubkey) -> Account {
     system_account(address, 0)
 }
 
-/// Create a rent-exempt program-owned account containing `data`.
-pub fn program_account(address: Pubkey, owner: Pubkey, data: Vec<u8>) -> Account {
+/// A rent-exempt program-owned account containing `data`.
+pub(crate) fn program_account(address: Pubkey, owner: Pubkey, data: Vec<u8>) -> Account {
     Account::new(
         address,
         owner,
@@ -27,7 +33,8 @@ pub fn program_account(address: Pubkey, owner: Pubkey, data: Vec<u8>) -> Account
     )
 }
 
-pub fn token_program_mint_account(
+/// An initialized SPL mint owned by `token_program`, packed at its canonical size.
+pub(crate) fn token_program_mint_account(
     address: Pubkey,
     mint_authority: Option<Pubkey>,
     freeze_authority: Option<Pubkey>,
@@ -47,7 +54,9 @@ pub fn token_program_mint_account(
     program_account(address, token_program, data)
 }
 
-pub fn token_program_account(
+/// An initialized SPL token account owned by `token_program`, packed at its
+/// canonical size.
+pub(crate) fn token_program_account(
     address: Pubkey,
     mint: Pubkey,
     owner: Pubkey,
@@ -67,7 +76,9 @@ pub fn token_program_account(
     program_account(address, token_program, data)
 }
 
-pub fn associated_token_account_with_program(
+/// An initialized SPL token account at the associated-token address for
+/// `wallet` and `mint`, owned by `token_program`.
+pub(crate) fn associated_token_account_with_program(
     wallet: Pubkey,
     mint: Pubkey,
     amount: u64,
