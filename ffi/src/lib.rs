@@ -432,6 +432,82 @@ mod tests {
         assert_eq!(code, PARALLAX_ERR_NULL_POINTER);
         assert!(!parallax_last_error().is_null());
     }
+
+    /// Build a program-less world for the boundary-robustness tests below.
+    fn program_less_handle() -> *mut parallax_svm::Test {
+        let program_id = [0u8; 32];
+        let handle = parallax_new(
+            &program_id as *const [u8; 32],
+            std::ptr::null(),
+            0,
+            false,
+            0,
+        );
+        assert!(!handle.is_null());
+        handle
+    }
+
+    // Loading bytes that are not a valid SBF ELF makes the core loader panic;
+    // the boundary must catch that unwind and report it as a program-load
+    // failure — a status code, never a crash across the C ABI.
+    #[test]
+    fn bad_elf_load_is_a_status_code_not_a_crash() {
+        let handle = program_less_handle();
+        let other_id = [5u8; 32];
+        let bad_elf = [0u8; 16];
+        let code = parallax_load_program(
+            handle,
+            &other_id as *const [u8; 32],
+            bad_elf.as_ptr(),
+            bad_elf.len() as u64,
+        );
+        assert_eq!(code, PARALLAX_ERR_PROGRAM_LOAD);
+        assert!(!parallax_last_error().is_null());
+        parallax_free(handle);
+    }
+
+    // A truncated instruction chain (claims one instruction, supplies no bytes)
+    // is a decode error, reported as an invalid-wire status.
+    #[test]
+    fn malformed_wire_send_is_a_status_code_not_a_crash() {
+        let handle = program_less_handle();
+        let truncated = 1u32.to_le_bytes();
+        let mut result: *mut u8 = std::ptr::null_mut();
+        let mut result_len: u64 = 0;
+        let code = parallax_send(
+            handle,
+            truncated.as_ptr(),
+            truncated.len() as u64,
+            std::ptr::null(),
+            0,
+            &mut result,
+            &mut result_len,
+        );
+        assert_eq!(code, PARALLAX_ERR_INVALID_WIRE);
+        assert!(!parallax_last_error().is_null());
+        parallax_free(handle);
+    }
+
+    // An absurd instruction count must be rejected as invalid wire, never turned
+    // into a huge allocation that aborts the process.
+    #[test]
+    fn absurd_instruction_count_through_ffi_is_rejected() {
+        let handle = program_less_handle();
+        let huge = u32::MAX.to_le_bytes();
+        let mut result: *mut u8 = std::ptr::null_mut();
+        let mut result_len: u64 = 0;
+        let code = parallax_send(
+            handle,
+            huge.as_ptr(),
+            huge.len() as u64,
+            std::ptr::null(),
+            0,
+            &mut result,
+            &mut result_len,
+        );
+        assert_eq!(code, PARALLAX_ERR_INVALID_WIRE);
+        parallax_free(handle);
+    }
 }
 
 // Micro-benchmarks for the wire codec — the new hot path between the core send

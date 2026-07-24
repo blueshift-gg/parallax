@@ -83,9 +83,12 @@ pub extern "C" fn parallax_new(
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_free(handle: *mut Test) {
     if !handle.is_null() {
-        unsafe {
+        // Dropping the world runs the backend's destructor; guard the unwind so a
+        // panic there can never cross the C boundary (which would be undefined
+        // behavior). Every other entry point wraps its body the same way.
+        let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
             drop(Box::from_raw(handle));
-        }
+        }));
     }
 }
 
@@ -122,17 +125,27 @@ pub extern "C" fn parallax_load_program(
     elf: *const u8,
     elf_len: u64,
 ) -> i32 {
-    if program_id.is_null() || elf.is_null() {
-        clear_last_error();
+    clear_last_error();
+    if handle.is_null() || program_id.is_null() || elf.is_null() {
         set_last_error("null pointer argument");
         return PARALLAX_ERR_NULL_POINTER;
     }
-    with_test(handle, |test| {
+    // The core loader panics on bytes that are not a valid SBF program. The only
+    // operation inside this guard that can unwind is that load, so a caught panic
+    // is a program-load failure — reported as such — rather than an internal
+    // fault.
+    match catch_unwind(AssertUnwindSafe(|| {
+        let test = unsafe { &mut *handle };
         let id = Pubkey::new_from_array(unsafe { *program_id });
         let elf = unsafe { slice::from_raw_parts(elf, elf_len as usize) };
         test.load_program(id, elf);
-        PARALLAX_OK
-    })
+    })) {
+        Ok(()) => PARALLAX_OK,
+        Err(_) => {
+            set_last_error("could not load program (is the ELF a valid SBF program?)");
+            PARALLAX_ERR_PROGRAM_LOAD
+        }
+    }
 }
 
 /// Set the runtime clock's Unix timestamp.

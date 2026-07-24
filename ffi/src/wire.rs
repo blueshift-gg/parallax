@@ -286,6 +286,24 @@ impl<'a> Reader<'a> {
         Ok(self.read_u32()? as usize)
     }
 
+    /// Read a `u32` element count for a list whose entries occupy at least
+    /// `min_element_size` bytes each, and reject any count the remaining buffer
+    /// could not possibly hold. This bounds the `Vec::with_capacity` that
+    /// follows: an untrusted count (up to `u32::MAX`) can no longer request a
+    /// multi-gigabyte allocation — which would *abort* the process on failure,
+    /// escaping the boundary's `catch_unwind` — from a short buffer.
+    fn read_count(&mut self, min_element_size: usize) -> Result<usize, &'static str> {
+        let count = self.read_len()?;
+        debug_assert!(
+            min_element_size > 0,
+            "elements must have a nonzero wire size"
+        );
+        if count > self.remaining() / min_element_size {
+            return Err("element count exceeds the remaining input");
+        }
+        Ok(count)
+    }
+
     fn read_u64(&mut self) -> Result<u64, &'static str> {
         let bytes: [u8; 8] = self.read_bytes(8)?.try_into().unwrap();
         Ok(u64::from_le_bytes(bytes))
@@ -423,10 +441,17 @@ impl Writer {
 // Input decoding
 // ---------------------------------------------------------------------------
 
+/// Minimum wire size of one list element, used to bound `Vec::with_capacity`
+/// against an untrusted count (see [`Reader::read_count`]).
+const INSTRUCTION_MIN_SIZE: usize = 32 + 4 + 4; // program_id + data_len + num_metas
+const META_MIN_SIZE: usize = 32 + 1 + 1; // pubkey + is_signer + is_writable
+const ACCOUNT_MIN_SIZE: usize = 32 + 32 + 8 + 4 + 1; // address + owner + lamports + data_len + executable
+const HOLDER_MIN_SIZE: usize = 32 + 8; // owner + amount
+
 fn read_one_instruction(r: &mut Reader) -> Result<Instruction, &'static str> {
     let program_id = r.read_pubkey()?;
     let data = r.read_length_prefixed()?;
-    let num_metas = r.read_len()?;
+    let num_metas = r.read_count(META_MIN_SIZE)?;
     let mut accounts = Vec::with_capacity(num_metas);
     for _ in 0..num_metas {
         let pubkey = r.read_pubkey()?;
@@ -448,7 +473,7 @@ fn read_one_instruction(r: &mut Reader) -> Result<Instruction, &'static str> {
 /// Decode a count-prefixed instruction chain.
 pub fn deserialize_instructions(data: &[u8]) -> Result<Vec<Instruction>, &'static str> {
     let mut r = Reader::new(data);
-    let count = r.read_len()?;
+    let count = r.read_count(INSTRUCTION_MIN_SIZE)?;
     let mut instructions = Vec::with_capacity(count);
     for _ in 0..count {
         instructions.push(read_one_instruction(&mut r)?);
@@ -460,7 +485,7 @@ pub fn deserialize_instructions(data: &[u8]) -> Result<Vec<Instruction>, &'stati
 /// Decode a count-prefixed list of explicit input accounts.
 pub fn deserialize_accounts(data: &[u8]) -> Result<Vec<Account>, &'static str> {
     let mut r = Reader::new(data);
-    let count = r.read_len()?;
+    let count = r.read_count(ACCOUNT_MIN_SIZE)?;
     let mut accounts = Vec::with_capacity(count);
     for _ in 0..count {
         accounts.push(r.read_account()?);
@@ -510,7 +535,7 @@ pub fn deserialize_mint_input(data: &[u8]) -> Result<MintInput, &'static str> {
     let supply = r.read_u64()?;
     let decimals = r.read_u8()?;
     let token_program = r.read_token_program()?;
-    let num_holders = r.read_len()?;
+    let num_holders = r.read_count(HOLDER_MIN_SIZE)?;
     let mut holders = Vec::with_capacity(num_holders);
     for _ in 0..num_holders {
         let owner = r.read_pubkey()?;
@@ -891,5 +916,53 @@ mod tests {
         w.write_bool(false);
         w.write_u8(0xFF); // one byte too many
         assert!(deserialize_wallet_input(&w.into_boxed_slice()).is_err());
+    }
+
+    // A malformed buffer that claims a huge element count must be rejected as an
+    // error, never turned into a multi-gigabyte `Vec::with_capacity` (whose
+    // allocation failure aborts the process, escaping the FFI `catch_unwind`).
+    // Each decoder gets `u32::MAX` as its count over a near-empty buffer.
+    #[test]
+    fn absurd_counts_are_rejected_without_huge_allocations() {
+        let huge = u32::MAX.to_le_bytes();
+
+        // Top-level instruction count.
+        assert!(deserialize_instructions(&huge).is_err());
+        // Top-level explicit-account count.
+        assert!(deserialize_accounts(&huge).is_err());
+
+        // Nested meta count: one instruction, empty data, then a huge num_metas.
+        let mut chain = Vec::new();
+        chain.extend_from_slice(&1u32.to_le_bytes()); // one instruction
+        chain.extend_from_slice(&[0u8; 32]); // program_id
+        chain.extend_from_slice(&0u32.to_le_bytes()); // data_len
+        chain.extend_from_slice(&huge); // num_metas
+        assert!(deserialize_instructions(&chain).is_err());
+
+        // Holder count inside a mint input.
+        let mut mint = Vec::new();
+        mint.push(0); // authority absent
+        mint.push(0); // freeze absent
+        mint.extend_from_slice(&0u64.to_le_bytes()); // supply
+        mint.push(6); // decimals
+        mint.push(0); // legacy
+        mint.extend_from_slice(&huge); // num_holders
+        assert!(deserialize_mint_input(&mint).is_err());
+    }
+
+    // A count that fits the buffer decodes; the same count with one byte trimmed
+    // does not — the bound tracks the actual buffer, it is not a fixed ceiling.
+    #[test]
+    fn count_bound_tracks_the_actual_buffer() {
+        let account = account(3);
+        let mut w = Writer::new();
+        w.write_len(1);
+        w.write_account(&account);
+        let full = w.into_boxed_slice();
+        assert!(deserialize_accounts(&full).is_ok());
+
+        // Drop the final byte: the single account no longer fits, so the decoder
+        // errors on the short read rather than over-reserving.
+        assert!(deserialize_accounts(&full[..full.len() - 1]).is_err());
     }
 }
