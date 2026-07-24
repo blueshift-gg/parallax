@@ -19,6 +19,21 @@ use parallax_svm::{
     Account, Pubkey, Test,
 };
 
+/// The opaque world handle: a [`Test`] plus the id of the thread that created
+/// it.
+///
+/// [`parallax_new`] boxes this and hands its address out as the opaque
+/// `*mut Test` the C ABI names; every entry point reinterprets that pointer as
+/// `*mut Handle` (see [`resolve`]) to reach both the world and its owning
+/// thread. The pointee's real type is `Handle`, but it stays opaque to C, so
+/// the header's `Test *` label is unchanged.
+struct Handle {
+    /// Thread that called [`parallax_new`]. Every later call on this handle
+    /// must come from it; see the [`parallax_new`] threading contract.
+    created_on: std::thread::ThreadId,
+    test: Test,
+}
+
 // ---------------------------------------------------------------------------
 // Error query
 // ---------------------------------------------------------------------------
@@ -39,6 +54,23 @@ pub extern "C" fn parallax_last_error() -> *const c_char {
 /// `elf`) to build a world with no primary program — only the runtime's
 /// built-ins (e.g. the SPL programs). Returns an opaque handle, or null on
 /// failure (`parallax_last_error` describes it). Free with [`parallax_free`].
+///
+/// # Threading
+///
+/// A handle is owned by the thread that creates it and must be used only from
+/// that thread. The handle is not a synchronization primitive: two threads
+/// calling on the same handle at once would be a data race (each call takes a
+/// `&mut` to the world), so a single handle is single-threaded, and distinct
+/// worlds on distinct threads never share state. As a best-effort tripwire the
+/// handle records its creating thread and every entry point rejects a call from
+/// another thread with `PARALLAX_ERR_WRONG_THREAD` before touching the world,
+/// turning the common accidental cross-thread call into a status code instead
+/// of undefined behavior. (This cannot catch a caller that races a call with
+/// [`parallax_free`] on another thread; not aliasing a live handle across
+/// threads is still the caller's contract.) [`parallax_free`] itself may run on
+/// any thread, provided nothing else is using the handle. Errors surface through
+/// the per-thread `parallax_last_error`, so read it on the same thread that made
+/// the failing call.
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_new(
     program_id: *const [u8; 32],
@@ -67,7 +99,13 @@ pub extern "C" fn parallax_new(
         builder.build()
     }));
     match built {
-        Ok(Ok(test)) => Box::into_raw(Box::new(test)),
+        // Box a `Handle` (world + creating thread) and hand its address out as
+        // the opaque `*mut Test`; `resolve` recovers the `Handle` on every call.
+        Ok(Ok(test)) => Box::into_raw(Box::new(Handle {
+            created_on: std::thread::current().id(),
+            test,
+        }))
+        .cast::<Test>(),
         Ok(Err(error)) => {
             set_last_error(format!("could not build world: {error}"));
             ptr::null_mut()
@@ -80,14 +118,20 @@ pub extern "C" fn parallax_new(
 }
 
 /// Free a handle returned by [`parallax_new`]. Safe on null.
+///
+/// Unlike the other entry points this is not pinned to the creating thread: the
+/// world is `Send`, so its destructor is sound on any thread. The caller must
+/// still ensure no other call is using the handle concurrently (see the
+/// [`parallax_new`] threading contract).
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_free(handle: *mut Test) {
     if !handle.is_null() {
         // Dropping the world runs the backend's destructor; guard the unwind so a
         // panic there can never cross the C boundary (which would be undefined
-        // behavior). Every other entry point wraps its body the same way.
+        // behavior). Every other entry point wraps its body the same way. The
+        // pointer is a relabeled `*mut Handle` (see `parallax_new`).
         let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
-            drop(Box::from_raw(handle));
+            drop(Box::from_raw(handle.cast::<Handle>()));
         }));
     }
 }
@@ -126,16 +170,20 @@ pub extern "C" fn parallax_load_program(
     elf_len: u64,
 ) -> i32 {
     clear_last_error();
-    if handle.is_null() || program_id.is_null() || elf.is_null() {
+    if program_id.is_null() || elf.is_null() {
         set_last_error("null pointer argument");
         return PARALLAX_ERR_NULL_POINTER;
     }
+    let handle = match resolve(handle) {
+        Ok(handle) => handle,
+        Err(code) => return code,
+    };
     // The core loader panics on bytes that are not a valid SBF program. The only
     // operation inside this guard that can unwind is that load, so a caught panic
     // is a program-load failure — reported as such — rather than an internal
     // fault.
     match catch_unwind(AssertUnwindSafe(|| {
-        let test = unsafe { &mut *handle };
+        let test = &mut handle.test;
         let id = Pubkey::new_from_array(unsafe { *program_id });
         let elf = unsafe { slice::from_raw_parts(elf, elf_len as usize) };
         test.load_program(id, elf);
@@ -310,12 +358,16 @@ pub extern "C" fn parallax_get_account(
     result_len_out: *mut u64,
 ) -> i32 {
     clear_last_error();
-    if handle.is_null() || address.is_null() || result_out.is_null() || result_len_out.is_null() {
+    if address.is_null() || result_out.is_null() || result_len_out.is_null() {
         set_last_error("null pointer argument");
         return PARALLAX_ERR_NULL_POINTER;
     }
+    let handle = match resolve(handle) {
+        Ok(handle) => handle,
+        Err(code) => return code,
+    };
     match catch_unwind(AssertUnwindSafe(|| {
-        let test = unsafe { &*handle };
+        let test = &handle.test;
         let address = Pubkey::new_from_array(unsafe { *address });
         let account = test.account(address);
         wire::serialize_optional_account(account.as_ref())
@@ -389,21 +441,48 @@ pub extern "C" fn parallax_simulate(
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Null-check the handle and run `body` with a mutable core reference inside a
-/// panic guard.
+/// Reinterpret the opaque handle as its [`Handle`] box and enforce the
+/// creating-thread pin, returning the wrapped world or the status code to
+/// return (with the last error already set).
+///
+/// The pin is a best-effort misuse tripwire, not a hard memory-safety barrier.
+/// A world is owned by the thread that created it; a call from any other thread
+/// is rejected with [`PARALLAX_ERR_WRONG_THREAD`] before the world is touched.
+/// This turns the common accidental cross-thread call — the exact shape a data
+/// race takes when one handle leaks across threads — into a clean status code.
+/// It cannot defend against a caller that races a call with [`parallax_free`]
+/// on another thread; not aliasing a live handle across threads remains the
+/// caller's contract, as it is for dereferencing any `*mut` the C ABI hands
+/// back.
+fn resolve<'a>(handle: *mut Test) -> Result<&'a mut Handle, i32> {
+    if handle.is_null() {
+        set_last_error("null handle argument");
+        return Err(PARALLAX_ERR_NULL_POINTER);
+    }
+    // SAFETY: a non-null handle came from `parallax_new`, which boxes a `Handle`
+    // and relabels its address as the opaque `*mut Test`; casting back recovers
+    // the same allocation. Liveness and the no-concurrent-aliasing contract are
+    // the caller's, identical to dereferencing any handle the C ABI returns.
+    let handle = unsafe { &mut *handle.cast::<Handle>() };
+    if handle.created_on != std::thread::current().id() {
+        set_last_error("world used from a different thread than the one that created it");
+        return Err(PARALLAX_ERR_WRONG_THREAD);
+    }
+    Ok(handle)
+}
+
+/// Null-check and thread-check the handle and run `body` with a mutable core
+/// reference inside a panic guard.
 fn with_test<F>(handle: *mut Test, body: F) -> i32
 where
     F: FnOnce(&mut Test) -> i32,
 {
     clear_last_error();
-    if handle.is_null() {
-        set_last_error("null handle argument");
-        return PARALLAX_ERR_NULL_POINTER;
-    }
-    match catch_unwind(AssertUnwindSafe(|| {
-        let test = unsafe { &mut *handle };
-        body(test)
-    })) {
+    let handle = match resolve(handle) {
+        Ok(handle) => handle,
+        Err(code) => return code,
+    };
+    match catch_unwind(AssertUnwindSafe(|| body(&mut handle.test))) {
         Ok(code) => code,
         Err(_) => {
             set_last_error("panic at FFI boundary");
@@ -425,18 +504,19 @@ where
     F: FnOnce(&mut Test, &[u8]) -> Result<Pubkey, String>,
 {
     clear_last_error();
-    if handle.is_null() || address_out.is_null() {
+    if address_out.is_null() {
         set_last_error("null pointer argument");
         return PARALLAX_ERR_NULL_POINTER;
     }
+    let handle = match resolve(handle) {
+        Ok(handle) => handle,
+        Err(code) => return code,
+    };
     let bytes = match input_bytes(input, input_len) {
         Ok(bytes) => bytes,
         Err(code) => return code,
     };
-    match catch_unwind(AssertUnwindSafe(|| {
-        let test = unsafe { &mut *handle };
-        install(test, bytes)
-    })) {
+    match catch_unwind(AssertUnwindSafe(|| install(&mut handle.test, bytes))) {
         Ok(Ok(address)) => {
             unsafe {
                 ptr::copy_nonoverlapping(address.to_bytes().as_ptr(), address_out, 32);
@@ -467,18 +547,15 @@ where
     F: FnOnce(&mut Test, &[u8]) -> Result<Box<[u8]>, String>,
 {
     clear_last_error();
-    if handle.is_null() {
-        set_last_error("null handle argument");
-        return PARALLAX_ERR_NULL_POINTER;
-    }
+    let handle = match resolve(handle) {
+        Ok(handle) => handle,
+        Err(code) => return code,
+    };
     let bytes = match input_bytes(input, input_len) {
         Ok(bytes) => bytes,
         Err(code) => return code,
     };
-    match catch_unwind(AssertUnwindSafe(|| {
-        let test = unsafe { &mut *handle };
-        install(test, bytes)
-    })) {
+    match catch_unwind(AssertUnwindSafe(|| install(&mut handle.test, bytes))) {
         Ok(Ok(blob)) => {
             write_result(result_out, result_len_out, blob);
             PARALLAX_OK
@@ -506,14 +583,14 @@ fn execute(
     commit: bool,
 ) -> i32 {
     clear_last_error();
-    if handle.is_null()
-        || instructions.is_null()
-        || result_out.is_null()
-        || result_len_out.is_null()
-    {
+    if instructions.is_null() || result_out.is_null() || result_len_out.is_null() {
         set_last_error("null pointer argument");
         return PARALLAX_ERR_NULL_POINTER;
     }
+    let handle = match resolve(handle) {
+        Ok(handle) => handle,
+        Err(code) => return code,
+    };
     let ix_bytes = unsafe { slice::from_raw_parts(instructions, instructions_len as usize) };
     let acct_bytes = match (accounts.is_null(), accounts_len) {
         (true, 0) => &[][..],
@@ -548,7 +625,7 @@ fn execute(
                 }
             }
         };
-        let test = unsafe { &mut *handle };
+        let test = &mut handle.test;
         let outcome = if commit {
             test.send_all_with(ixs, inputs)
         } else {

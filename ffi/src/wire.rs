@@ -6,6 +6,24 @@
 //! addresses, backfill, fee model, account-change tracking, error mapping); the
 //! wire only moves option-bags in and result bundles out.
 //!
+//! # Threading
+//!
+//! A world handle from `parallax_new` is owned by the thread that created it
+//! and is single-threaded: it is not a synchronization primitive, and two
+//! threads calling on one handle at once would race on the world's state. Each
+//! entry point rejects a call from any thread other than the creator with
+//! `PARALLAX_ERR_WRONG_THREAD` before touching the world — a best-effort
+//! tripwire that turns the common accidental cross-thread call into a status
+//! code rather than undefined behavior (it does not make concurrent use safe;
+//! see [`parallax_new`](crate::ffi::parallax_new)). Distinct handles on
+//! distinct threads are independent and never share state.
+//!
+//! The last-error channel behind `parallax_last_error` is **per-thread**: it
+//! reports only the most recent failure on the calling thread. A C caller
+//! driving several worlds from several threads must read `parallax_last_error`
+//! on the same thread that made the failing call — an error raised on one
+//! thread is invisible to the others (see [`crate::error`]).
+//!
 //! # Conventions
 //!
 //! * All integers are **little-endian**.

@@ -450,6 +450,16 @@ function isNullPointer(handle: unknown): boolean {
  * A thin, typed wrapper over one `parallax-svm-ffi` world handle. Every method
  * serializes its option-bag, crosses the boundary once, and deserializes the
  * result. The Rust core owns all harness semantics; this class only marshals.
+ *
+ * Threading: a world handle is owned by the thread that created it. The native
+ * calls here are synchronous, so they run on the thread that invoked them —
+ * ordinarily Node's main thread, where a `Kernel` is created, used, and freed
+ * on one thread and the pin never trips. A handle must not be shared with a
+ * `worker_thread`: the native boundary rejects a cross-thread call with a
+ * wrong-thread error rather than racing on the world (see `parallax_new`). A
+ * Worker that needs its own world creates, uses, and frees its own `Kernel`.
+ * The boundary's last-error string is likewise per-thread, so `#check` reads it
+ * on the same thread that made the failing call.
  */
 export class Kernel {
   #handle: unknown;

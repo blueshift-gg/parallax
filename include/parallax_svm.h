@@ -31,6 +31,12 @@
 #define PARALLAX_ERR_EXECUTION -4
 
 /**
+ * A world handle was used from a thread other than the one that created it.
+ * Each world is owned by its creating thread; see [`crate::ffi::parallax_new`].
+ */
+#define PARALLAX_ERR_WRONG_THREAD -5
+
+/**
  * A Rust panic was caught at the boundary.
  */
 #define PARALLAX_ERR_INTERNAL -99
@@ -57,6 +63,23 @@ const char *parallax_last_error(void);
  * `elf`) to build a world with no primary program — only the runtime's
  * built-ins (e.g. the SPL programs). Returns an opaque handle, or null on
  * failure (`parallax_last_error` describes it). Free with [`parallax_free`].
+ *
+ * # Threading
+ *
+ * A handle is owned by the thread that creates it and must be used only from
+ * that thread. The handle is not a synchronization primitive: two threads
+ * calling on the same handle at once would be a data race (each call takes a
+ * `&mut` to the world), so a single handle is single-threaded, and distinct
+ * worlds on distinct threads never share state. As a best-effort tripwire the
+ * handle records its creating thread and every entry point rejects a call from
+ * another thread with `PARALLAX_ERR_WRONG_THREAD` before touching the world,
+ * turning the common accidental cross-thread call into a status code instead
+ * of undefined behavior. (This cannot catch a caller that races a call with
+ * [`parallax_free`] on another thread; not aliasing a live handle across
+ * threads is still the caller's contract.) [`parallax_free`] itself may run on
+ * any thread, provided nothing else is using the handle. Errors surface through
+ * the per-thread `parallax_last_error`, so read it on the same thread that made
+ * the failing call.
  */
 Test *parallax_new(const uint8_t (*program_id)[32],
                    const uint8_t *elf,
@@ -66,6 +89,11 @@ Test *parallax_new(const uint8_t (*program_id)[32],
 
 /**
  * Free a handle returned by [`parallax_new`]. Safe on null.
+ *
+ * Unlike the other entry points this is not pinned to the creating thread: the
+ * world is `Send`, so its destructor is sound on any thread. The caller must
+ * still ensure no other call is using the handle concurrently (see the
+ * [`parallax_new`] threading contract).
  */
 void parallax_free(Test *handle);
 

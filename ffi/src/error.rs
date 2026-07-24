@@ -4,6 +4,18 @@
 //! success, a negative code on failure. On failure the function also stores a
 //! human-readable message retrievable with `parallax_last_error`; the pointer
 //! is valid until the next FFI call on the same thread.
+//!
+//! # The last-error channel is per-thread
+//!
+//! The last-error string lives in a `thread_local!`, so `parallax_last_error`
+//! reports only the error from the most recent FFI call *on the calling
+//! thread*. A C caller driving several worlds from several threads must read
+//! `parallax_last_error` on the same thread that made the failing call, before
+//! that thread makes another FFI call — an error raised on one thread is
+//! invisible to every other. Within one thread this is exactly the
+//! documented "valid until the next FFI call" contract; across threads the
+//! channels are independent. (The harness itself pins each world to one
+//! thread; see [`crate::ffi::parallax_new`].)
 
 use std::cell::RefCell;
 use std::ffi::CString;
@@ -19,6 +31,9 @@ pub const PARALLAX_ERR_INVALID_WIRE: i32 = -2;
 pub const PARALLAX_ERR_PROGRAM_LOAD: i32 = -3;
 /// Transaction execution set-up failed (before the runtime ran).
 pub const PARALLAX_ERR_EXECUTION: i32 = -4;
+/// A world handle was used from a thread other than the one that created it.
+/// Each world is owned by its creating thread; see [`crate::ffi::parallax_new`].
+pub const PARALLAX_ERR_WRONG_THREAD: i32 = -5;
 /// A Rust panic was caught at the boundary.
 pub const PARALLAX_ERR_INTERNAL: i32 = -99;
 

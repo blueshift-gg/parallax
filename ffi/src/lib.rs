@@ -451,6 +451,39 @@ mod tests {
         assert!(!parallax_last_error().is_null());
     }
 
+    // A world is pinned to its creating thread: a call from another thread is a
+    // PARALLAX_ERR_WRONG_THREAD status code, not a data race into the world. The
+    // same call on the creating thread still succeeds, and the rejection's
+    // message lands on the last-error channel of the thread that made the call.
+    #[test]
+    fn cross_thread_use_is_a_status_code_not_a_data_race() {
+        let handle = program_less_handle();
+
+        // Raw pointers are !Send; carry the address across the thread boundary
+        // exactly as a C caller sharing the handle would, provenance preserved.
+        struct SendHandle(*mut parallax_svm::Test);
+        unsafe impl Send for SendHandle {}
+        let moved = SendHandle(handle);
+
+        let code = std::thread::spawn(move || {
+            // Capture the whole wrapper, not its !Send field (2021 disjoint capture).
+            let moved = moved;
+            let code = parallax_warp_to_timestamp(moved.0, 1);
+            assert!(
+                !parallax_last_error().is_null(),
+                "the wrong-thread error is set on the calling thread"
+            );
+            code
+        })
+        .join()
+        .unwrap();
+        assert_eq!(code, PARALLAX_ERR_WRONG_THREAD);
+
+        // The creating thread is unaffected by the rejected cross-thread call.
+        assert_eq!(parallax_warp_to_timestamp(handle, 1), PARALLAX_OK);
+        parallax_free(handle);
+    }
+
     /// Build a program-less world for the boundary-robustness tests below.
     fn program_less_handle() -> *mut parallax_svm::Test {
         let program_id = [0u8; 32];
