@@ -383,7 +383,7 @@ export class TestCore<Address, Account, Instruction, Output> {
   #requiredAccount(address: Address): Account {
     const account = this.account(address);
     if (account === null) {
-      throw new Error(`no account at ${this.#adapter.addressKey(address)}`);
+      throw new Error(`no account at ${this.#adapter.renderAddress(address)}`);
     }
     return account;
   }
