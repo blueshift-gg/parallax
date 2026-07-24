@@ -60,6 +60,26 @@ wincode = { version = "0.5", features = ["derive"] }
 [workspace]
 members = ["derive", "ffi"]
 
+# Panic strategy is load-bearing for FFI soundness, not a tuning knob.
+#
+# The `parallax-svm-ffi` boundary (ffi/src/ffi.rs) wraps every extern entry
+# point in `catch_unwind` so a panic in the harness becomes a status code
+# instead of unwinding across the C ABI — which would be undefined behavior.
+# That proof holds only under `panic = "unwind"`: with `panic = "abort"` a
+# panic aborts the whole process (taking the C host down) before `catch_unwind`
+# can convert it, so the boundary's safety guarantee silently evaporates.
+#
+# Unwind is already the toolchain default; pinning it here makes the FFI
+# invariant explicit and tamper-evident. The shipped cdylib builds under
+# `--release` (see Makefile); `dev` is pinned too so the in-process FFI tests
+# exercise the same strategy. Do not change these to `abort` without first
+# removing the `catch_unwind` boundary and its safety proofs.
+[profile.release]
+panic = "unwind"
+
+[profile.dev]
+panic = "unwind"
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"

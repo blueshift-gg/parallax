@@ -7,6 +7,16 @@
 //! against — is documented in [`wire`]. The extern entry points live in
 //! [`ffi`]; status codes and the last-error channel in [`error`].
 //!
+//! # Panic strategy
+//!
+//! Every `catch_unwind` in [`ffi`] rests on one assumption: a Rust panic
+//! *unwinds*. Under `panic = "abort"` a panic terminates the process before
+//! `catch_unwind` can turn it into a status code, so a panic in the harness
+//! would crash the C host rather than being reported across the boundary. The
+//! workspace pins `panic = "unwind"` in `[profile.release]` and `[profile.dev]`
+//! (see the root `Cargo.toml`) to keep that assumption true wherever this
+//! cdylib is built; the boundary's soundness proofs are only valid under it.
+//!
 //! Every extern entry point dereferences the raw pointers a C caller hands it —
 //! that unsafety is the boundary's contract, not an oversight — so the crate
 //! opts out of `clippy::not_unsafe_ptr_arg_deref` rather than marking every
