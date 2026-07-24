@@ -237,7 +237,14 @@ export class LiteSvmRuntime<Address, Account, Instruction>
         computeUnits: result.computeUnitsConsumed(),
         logs: result.logs(),
         returnData: readReturnData(result),
-        accounts: rtAccounts.map(account => this.#committed(account)),
+        // A read-only account cannot change, so its committed state is the
+        // seeded input — only writable accounts and the fee payer (whose
+        // pre-funding nets back out) are read from the store.
+        accounts: rtAccounts.map(account =>
+          writable.has(account.address) || account.address === feePayer
+            ? this.#committed(account)
+            : this.#convert.buildAccount(account),
+        ),
       };
     }
 
