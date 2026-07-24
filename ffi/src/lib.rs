@@ -75,7 +75,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct WireAccount {
         address: Pubkey,
         owner: Pubkey,
@@ -124,18 +124,26 @@ mod tests {
         for _ in 0..num_logs {
             let _ = c.bytes();
         }
+        // Post-state accounts precede changes; a change's `after` is a presence
+        // bit resolved back to the account listed here at the same address.
+        let num_accounts = c.u32();
+        let mut accounts = Vec::with_capacity(num_accounts);
+        for _ in 0..num_accounts {
+            accounts.push(read_account(&mut c));
+        }
         let num_changes = c.u32();
         let mut changes = Vec::with_capacity(num_changes);
         for _ in 0..num_changes {
             let address = c.pubkey();
             let before = read_option_account(&mut c);
-            let after = read_option_account(&mut c);
+            let after = c.bool().then(|| {
+                accounts
+                    .iter()
+                    .find(|account| account.address == address)
+                    .expect("after_present resolves to a post-state account")
+                    .clone()
+            });
             changes.push((address, before, after));
-        }
-        let num_accounts = c.u32();
-        let mut accounts = Vec::with_capacity(num_accounts);
-        for _ in 0..num_accounts {
-            accounts.push(read_account(&mut c));
         }
         assert_eq!(c.pos, bytes.len(), "outcome bundle had trailing bytes");
         Bundle {

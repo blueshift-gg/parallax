@@ -173,30 +173,48 @@ export interface MintInstall {
 // ---------------------------------------------------------------------------
 
 class Writer {
-  readonly #chunks: Buffer[] = [];
+  // One growable buffer written in place, doubling on demand. The previous
+  // chunk-list-plus-concat allocated a Buffer per primitive (a fresh 1-byte
+  // Buffer for every bool) and copied everything again at `finish`.
+  #buf = Buffer.allocUnsafe(256);
+  #pos = 0;
+
+  #ensure(extra: number): void {
+    const needed = this.#pos + extra;
+    if (needed <= this.#buf.length) return;
+    let capacity = this.#buf.length * 2;
+    while (capacity < needed) capacity *= 2;
+    const grown = Buffer.allocUnsafe(capacity);
+    this.#buf.copy(grown, 0, 0, this.#pos);
+    this.#buf = grown;
+  }
 
   bool(value: boolean): void {
-    this.#chunks.push(Buffer.from([value ? 1 : 0]));
+    this.#ensure(1);
+    this.#buf[this.#pos] = value ? 1 : 0;
+    this.#pos += 1;
   }
 
   u8(value: number): void {
-    this.#chunks.push(Buffer.from([value & 0xff]));
+    this.#ensure(1);
+    this.#buf[this.#pos] = value & 0xff;
+    this.#pos += 1;
   }
 
   u32(value: number): void {
-    const buf = Buffer.allocUnsafe(4);
-    buf.writeUInt32LE(value >>> 0);
-    this.#chunks.push(buf);
+    this.#ensure(4);
+    this.#pos = this.#buf.writeUInt32LE(value >>> 0, this.#pos);
   }
 
   u64(value: bigint): void {
-    const buf = Buffer.allocUnsafe(8);
-    buf.writeBigUInt64LE(value);
-    this.#chunks.push(buf);
+    this.#ensure(8);
+    this.#pos = this.#buf.writeBigUInt64LE(value, this.#pos);
   }
 
   bytes(value: Uint8Array): void {
-    this.#chunks.push(Buffer.from(value));
+    this.#ensure(value.length);
+    this.#buf.set(value, this.#pos);
+    this.#pos += value.length;
   }
 
   lengthPrefixed(value: Uint8Array): void {
@@ -229,8 +247,10 @@ class Writer {
     this.bool(value.executable);
   }
 
+  /** The written bytes, as a view over the internal buffer. The returned Buffer
+   *  is only valid until the next write, and the Writer is not reused after. */
   finish(): Buffer {
-    return Buffer.concat(this.#chunks);
+    return this.#buf.subarray(0, this.#pos);
   }
 }
 
@@ -260,7 +280,11 @@ class Reader {
   }
 
   take(n: number): Uint8Array {
-    const slice = Uint8Array.from(this.buf.subarray(this.#pos, this.#pos + n));
+    // Copy out of the (possibly native-backed) buffer: the returned bytes
+    // escape into the decoded objects and outlive the buffer. The typed-array
+    // constructor copies via memcpy, faster than `Uint8Array.from`'s per-element
+    // iteration.
+    const slice = new Uint8Array(this.buf.subarray(this.#pos, this.#pos + n));
     this.#pos += n;
     return slice;
   }
@@ -357,6 +381,11 @@ function serializeAccounts(accounts: readonly WireAccount[]): Buffer {
 // Output deserialization
 // ---------------------------------------------------------------------------
 
+/** A cheap map key for a 32-byte address, avoiding any base58 work. */
+function addressKey(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("latin1");
+}
+
 function deserializeOutcome(buf: Buffer): WireOutcome {
   const r = new Reader(buf);
   let error: ProgramError | null = null;
@@ -371,18 +400,25 @@ function deserializeOutcome(buf: Buffer): WireOutcome {
   const numLogs = r.u32();
   const logs: string[] = [];
   for (let i = 0; i < numLogs; i += 1) logs.push(r.string());
+  // Post-state accounts precede changes on the wire; index them by address so a
+  // change's `after` resolves to the shared account object it duplicates,
+  // instead of a second decode.
+  const numAccounts = r.u32();
+  const accounts: WireAccount[] = [];
+  const byAddress = new Map<string, WireAccount>();
+  for (let i = 0; i < numAccounts; i += 1) {
+    const account = r.account();
+    accounts.push(account);
+    byAddress.set(addressKey(account.address), account);
+  }
   const numChanges = r.u32();
   const changes: WireChange[] = [];
   for (let i = 0; i < numChanges; i += 1) {
-    changes.push({
-      address: r.pubkey(),
-      before: r.optionAccount(),
-      after: r.optionAccount(),
-    });
+    const address = r.pubkey();
+    const before = r.optionAccount();
+    const after = r.bool() ? (byAddress.get(addressKey(address)) ?? null) : null;
+    changes.push({ address, before, after });
   }
-  const numAccounts = r.u32();
-  const accounts: WireAccount[] = [];
-  for (let i = 0; i < numAccounts; i += 1) accounts.push(r.account());
   return { error, computeUnits, returnData, logs, changes, accounts };
 }
 
@@ -534,14 +570,18 @@ export class Kernel {
       w.u64(amount);
     }
     const bytes = w.finish();
-    return deserializePubkeys(
-      this.#result(parallax_install_mint, [bytes, BigInt(bytes.length)]),
+    return this.#result(
+      parallax_install_mint,
+      [bytes, BigInt(bytes.length)],
+      deserializePubkeys,
     );
   }
 
   getAccount(address: Uint8Array): WireAccount | null {
-    return deserializeOptionalAccount(
-      this.#result(parallax_get_account, [Buffer.from(address)]),
+    return this.#result(
+      parallax_get_account,
+      [Buffer.from(address)],
+      deserializeOptionalAccount,
     );
   }
 
@@ -574,8 +614,10 @@ export class Kernel {
   ): WireOutcome {
     const ix = serializeInstructions(instructions);
     const acct = serializeAccounts(accounts);
-    return deserializeOutcome(
-      this.#result(fn, [ix, BigInt(ix.length), acct, BigInt(acct.length)]),
+    return this.#result(
+      fn,
+      [ix, BigInt(ix.length), acct, BigInt(acct.length)],
+      deserializeOutcome,
     );
   }
 
@@ -585,15 +627,32 @@ export class Kernel {
     return Uint8Array.from(out);
   }
 
-  #result(fn: (...args: unknown[]) => number, args: unknown[]): Buffer {
+  /**
+   * Call a result-returning extern, decode its blob, and free it. `parse` runs
+   * against a zero-copy view over the native result (koffi.view, not the old
+   * per-byte koffi.decode array) and must copy out everything it keeps — every
+   * decoder here does — because the view is invalid the instant the buffer is
+   * freed in the `finally`.
+   */
+  #result<T>(
+    fn: (...args: unknown[]) => number,
+    args: unknown[],
+    parse: (buf: Buffer) => T,
+  ): T {
     const ptrOut = [null];
     const lenOut = [0n];
     this.#check(fn(this.#alive(), ...args, ptrOut, lenOut));
     const ptr = ptrOut[0];
     const len = Number(lenOut[0]);
-    const blob = Buffer.from(koffi.decode(ptr, "uint8_t", len) as number[]);
-    parallax_free_bytes(ptr, BigInt(len));
-    return blob;
+    const view =
+      len === 0
+        ? Buffer.alloc(0)
+        : Buffer.from(koffi.view(ptr, len) as ArrayBuffer, 0, len);
+    try {
+      return parse(view);
+    } finally {
+      parallax_free_bytes(ptr, BigInt(len));
+    }
   }
 
   #alive(): unknown {

@@ -372,15 +372,24 @@ export class TestCore<Address, Account, Instruction, Output>
       logs: bundle.logs,
       returnData: bundle.returnData,
     };
-    const accounts = bundle.accounts.map(account =>
-      this.#adapter.buildAccount(account),
-    );
+    // Build each post-state account once. A change's `after` is the very same
+    // wire account object (the bundle dedupes it), so reuse the built value
+    // rather than materializing — and base58-decoding — it a second time.
+    const builtByWire = new Map<WireAccount, Account>();
+    const accounts = bundle.accounts.map(account => {
+      const built = this.#adapter.buildAccount(account);
+      builtByWire.set(account, built);
+      return built;
+    });
     const changes = bundle.changes.map(
       change =>
         new AccountChange(
           this.#adapter.bytesToAddress(change.address),
           change.before === null ? null : this.#adapter.buildAccount(change.before),
-          change.after === null ? null : this.#adapter.buildAccount(change.after),
+          change.after === null
+            ? null
+            : (builtByWire.get(change.after) ??
+              this.#adapter.buildAccount(change.after)),
         ),
     );
     return this.#adapter.outcome(result, accounts, changes);

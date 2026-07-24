@@ -168,16 +168,25 @@
 //! --- logs (execution order) ---
 //! [4] num_logs
 //! per log: string
+//! --- post-state accounts (first-appearance order; existing accounts only) ---
+//! [4] num_accounts
+//! per account: account
 //! --- account changes (first-appearance instruction order) ---
 //! [4] num_changes
 //! per change:
 //!   [32] address
 //!   option<account> before     // absent => created by this transaction
-//!   option<account> after      // absent => removed by this transaction
-//! --- post-state accounts (first-appearance order; existing accounts only) ---
-//! [4] num_accounts
-//! per account: account
+//!   [1]  after_present (bool)   // 1 => the post-state account listed above at
+//!                               //      this address; 0 => removed
 //! ```
+//!
+//! Post-state accounts precede changes deliberately: a changed account's
+//! `after` state is byte-identical to its post-state account, so the bundle
+//! carries it once (in `accounts`) and each change references it by address
+//! through the `after_present` bit. The consumer indexes `accounts` by address
+//! first, then resolves every `after` without a second copy on the wire — a
+//! large-account transaction no longer pays to serialize, transfer, and decode
+//! each changed account twice.
 //!
 //! ### `ProgramError` tag table (u8)
 //!
@@ -697,20 +706,26 @@ pub fn serialize_outcome(outcome: &Outcome) -> Box<[u8]> {
         w.write_length_prefixed(log.as_bytes());
     }
 
-    // Account changes (first-appearance order).
+    // Post-state accounts first (first-appearance order; existing accounts
+    // only), so the consumer can resolve each change's `after` by address as it
+    // reads the changes, without buffering.
+    let accounts = outcome.accounts();
+    w.write_len(accounts.len());
+    for account in accounts {
+        w.write_account(account);
+    }
+
+    // Account changes (first-appearance order). `before` is unique to the
+    // change and carried in full. `after`, when present, is byte-identical to
+    // the post-state account written above at the same address, so it rides as a
+    // single presence bit rather than a second copy; `after` is absent only when
+    // the transaction removed the account.
     let changes = outcome.account_changes();
     w.write_len(changes.len());
     for change in changes {
         w.write_pubkey(&change.address());
         w.write_option_account(change.before());
-        w.write_option_account(change.after());
-    }
-
-    // Post-state accounts (first-appearance order; existing accounts only).
-    let accounts = outcome.accounts();
-    w.write_len(accounts.len());
-    for account in accounts {
-        w.write_account(account);
+        w.write_bool(change.after().is_some());
     }
 
     w.into_boxed_slice()
