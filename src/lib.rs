@@ -374,6 +374,70 @@ mod tests {
         assert_eq!(*snapshot, 99);
     }
 
+    // Trailing-bytes contract for `read`/`read_at`. wincode decodes exactly `T`'s
+    // bytes and stops; the harness then requires the unconsumed tail to be all
+    // zero. A stray non-zero byte past a well-formed value — the fingerprint of
+    // the wrong (or a stale) type read against an account — is a precise panic,
+    // not a silent short read.
+    #[test]
+    #[should_panic(expected = "trailing")]
+    fn read_rejects_nonzero_trailing_bytes() {
+        let mut test = empty_test();
+        let program = test.program_id();
+        let address = Pubkey::new_from_array([7; 32]);
+
+        // A well-formed 40-byte Vault, then one stray non-zero byte.
+        let mut data = wincode::serialize(&Vault {
+            owner: [1; 32],
+            amount: 5,
+        })
+        .unwrap();
+        data.push(0xAB);
+        test.set_account(Account::new(address, program, 1, data));
+
+        let _ = test.read::<Vault>(address);
+    }
+
+    // Zeroed trailing bytes are reserved padding — a growable or migration-target
+    // account carries space for future fields, zero-initialized on chain — so a
+    // typed read of the current fields still succeeds.
+    #[test]
+    fn read_allows_zeroed_reserved_padding() {
+        let mut test = empty_test();
+        let program = test.program_id();
+        let address = Pubkey::new_from_array([8; 32]);
+
+        let mut data = wincode::serialize(&Vault {
+            owner: [2; 32],
+            amount: 9,
+        })
+        .unwrap();
+        data.extend_from_slice(&[0; 16]); // reserved padding for future fields
+        test.set_account(Account::new(address, program, 1, data));
+
+        let snapshot = test.read::<Vault>(address);
+        assert_eq!(snapshot.owner, [2; 32]);
+        assert_eq!(snapshot.amount, 9);
+    }
+
+    // The tail check applies to `read_at`'s suffix too: after the framed offset,
+    // a non-zero unconsumed byte is rejected.
+    #[test]
+    #[should_panic(expected = "trailing")]
+    fn read_at_rejects_nonzero_trailing_bytes() {
+        let mut test = empty_test();
+        let program = test.program_id();
+        let address = Pubkey::new_from_array([9; 32]);
+
+        // A one-byte discriminator, a u64, then a stray non-zero byte.
+        let mut data = vec![0xAB];
+        data.extend_from_slice(&7_u64.to_le_bytes());
+        data.push(0x01);
+        test.set_account(Account::new(address, program, 1, data));
+
+        let _ = test.read_at::<u64>(address, 1);
+    }
+
     #[test]
     fn derive_pda_matches_find_program_address() {
         let test = empty_test();

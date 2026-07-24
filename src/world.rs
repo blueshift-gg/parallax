@@ -130,10 +130,24 @@ impl Test {
     /// program wrote, decoded back into the client type. For a type whose
     /// schema covers only a suffix of the data, use [`Self::read_at`].
     ///
+    /// # Trailing bytes
+    ///
+    /// `T` must consume the account. wincode reads exactly `T`'s bytes and
+    /// stops; any tail left over must be **all zero** — Solana's
+    /// zero-initialized reserved padding, as a growable or migration-target
+    /// account carries for future fields. A *non-zero* unconsumed byte is the
+    /// fingerprint of the wrong or a stale type read against the account and
+    /// **panics**, rather than silently returning a value decoded from a prefix.
+    /// (Every macro-generated account is sized to exactly its schema, so this is
+    /// invisible in the common case; it only fires on a genuine mismatch.) To
+    /// read a fixed prefix and ignore a non-zero tail deliberately, fetch the
+    /// raw bytes with [`Self::account`] and decode them yourself.
+    ///
     /// # Panics
     ///
     /// Panics with the address and the wincode error when no account exists at
-    /// `address` or its bytes do not decode as `T`.
+    /// `address` or its bytes do not decode as `T`, and when a non-zero tail
+    /// remains after `T` (see *Trailing bytes*).
     pub fn read<T>(&self, address: Pubkey) -> Snapshot<T>
     where
         T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T>,
@@ -147,10 +161,16 @@ impl Test {
     /// example decoding the fields after a discriminator the caller frames
     /// separately.
     ///
+    /// The same trailing-bytes contract as [`Self::read`] applies to the region
+    /// *after* `offset`: `T` must consume it, save for a zeroed reserved-padding
+    /// tail; a non-zero unconsumed byte past `T` panics. `offset` frames the
+    /// bytes before `T` (a discriminator); it does not license a non-zero suffix
+    /// after `T`.
+    ///
     /// # Panics
     ///
-    /// Panics like [`Self::read`], and additionally when the account holds
-    /// fewer than `offset` bytes.
+    /// Panics like [`Self::read`] — including on a non-zero tail after `T` — and
+    /// additionally when the account holds fewer than `offset` bytes.
     pub fn read_at<T>(&self, address: Pubkey, offset: usize) -> Snapshot<T>
     where
         T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T>,
@@ -440,20 +460,41 @@ fn assert_unique_accounts(accounts: &[Account]) {
 /// by [`Test::read`], [`Test::read_at`], and [`crate::Outcome::has_state`] so
 /// every typed read takes the same decode path. `context` names the calling
 /// operation so panics stay actionable.
+///
+/// wincode reads exactly `T`'s serialized bytes and stops, so a schema shorter
+/// than the account leaves a tail. This enforces the [`Test::read`] contract:
+/// the tail must be all zero — Solana's zero-initialized reserved padding, the
+/// one legitimate longer-than-typed shape (a growable or migration-target
+/// account). A *non-zero* unconsumed byte is the fingerprint of the wrong or a
+/// stale type read against the account, and panics rather than silently
+/// returning a short read.
 pub(crate) fn decode<T>(context: &str, address: Pubkey, data: &[u8], offset: usize) -> T
 where
     T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T>,
 {
     let name = core::any::type_name::<T>();
-    let bytes = data.get(offset..).unwrap_or_else(|| {
+    let mut cursor = data.get(offset..).unwrap_or_else(|| {
         panic!(
             "{context} {name}: account {address} holds {} bytes, need at least {offset}",
             data.len()
         )
     });
-    wincode::deserialize::<T>(bytes).unwrap_or_else(|error| {
+    // Read through `&mut &[u8]` so the cursor advances to the unconsumed tail,
+    // exactly as wincode's own `deserialize_exact` does — then inspect that tail
+    // instead of merely requiring it to be empty.
+    let value = <T as SchemaRead<'_, DefaultConfig>>::get(&mut cursor).unwrap_or_else(|error| {
         panic!("{context} {name}: account {address} did not decode as {name}: {error:?}")
-    })
+    });
+    if let Some(first_nonzero) = cursor.iter().position(|&byte| byte != 0) {
+        panic!(
+            "{context} {name}: account {address} has {trailing} trailing byte(s) past the \
+             decoded {name} (first non-zero {first_nonzero} byte(s) in); read/read_at allow \
+             only zeroed reserved padding after the value — read the correct type, or frame a \
+             suffix with read_at",
+            trailing = cursor.len(),
+        );
+    }
+    value
 }
 
 /// Typed account state captured at one point in a test.
