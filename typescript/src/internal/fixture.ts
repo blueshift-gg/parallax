@@ -112,6 +112,20 @@ export interface FixtureHost<Address> {
     data: Uint8Array,
   ): Address;
   loadProgram(programId: Address, elf: Uint8Array): Address;
+  dumpAccounts(
+    addresses: readonly Address[],
+    syncClock: boolean,
+  ): Promise<readonly Address[]>;
+  dumpProgram(programId: Address, syncClock: boolean): Promise<Address>;
+  refreshAll(): Promise<Address[]>;
+}
+
+/** Option-bag for `dump({ accounts, syncClock? })`. */
+export interface DumpOptions<Address> {
+  /** Mainnet addresses to dump. Returned unchanged, in the same arity. */
+  readonly accounts: readonly Address[];
+  /** Adopt the dumped slot's clock. Opt-in; off by default. */
+  readonly syncClock?: boolean;
 }
 
 export function createFixtureFactories<
@@ -189,5 +203,33 @@ export function createFixtureFactories<
         install: test => test.loadProgram(programId, elf),
       };
     },
+
+    // `dump({ accounts })` copies mainnet accounts into the world through the
+    // committed `.parallax/` store; `dump.program(id)` dumps and loads a real
+    // program; `dump.refreshAll()` re-fetches every stored entry at one slot.
+    dump: Object.assign(
+      <const T extends readonly Address[]>(options: {
+        accounts: T;
+        syncClock?: boolean;
+      }): Fixture<T, Host> => ({
+        install: async test => {
+          await test.dumpAccounts(options.accounts, options.syncClock ?? false);
+          return options.accounts;
+        },
+      }),
+      {
+        program(
+          programId: Address,
+          options: { syncClock?: boolean } = {},
+        ): Fixture<Address, Host> {
+          return {
+            install: test => test.dumpProgram(programId, options.syncClock ?? false),
+          };
+        },
+        refreshAll(): Fixture<Address[], Host> {
+          return { install: test => test.refreshAll() };
+        },
+      },
+    ),
   };
 }

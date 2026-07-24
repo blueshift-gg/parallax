@@ -25,7 +25,7 @@
     "check-api": "npm run build && node scripts/check-public-api.mjs",
     "check-consumer": "npm run build && bash scripts/check-packed-consumer.sh",
     "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
-    "test": "vitest run tests/fixture-harness.test.ts",
+    "test": "vitest run tests/fixture-harness.test.ts tests/dump.test.ts",
     "test:program": "vitest run tests/program-parity.test.ts",
     "prepack": "npm run build"
   },

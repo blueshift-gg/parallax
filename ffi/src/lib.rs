@@ -155,6 +155,7 @@ mod tests {
             });
             changes.push((address, before, after));
         }
+        let _hint = c.bytes(); // trailing guided-error hint (empty when none)
         assert_eq!(c.pos, bytes.len(), "outcome bundle had trailing bytes");
         Bundle {
             is_err,

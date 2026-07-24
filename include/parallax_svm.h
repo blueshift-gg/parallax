@@ -207,4 +207,22 @@ int32_t parallax_simulate(Test *handle,
                           uint8_t **result_out,
                           uint64_t *result_len_out);
 
+/**
+ * Phase one of a dump: install cache hits and return the request body for the
+ * misses through `result_out`/`result_len_out` (see the wire `plan` result).
+ * An empty request body means the store already covered every target. Free the
+ * buffer with [`parallax_free_bytes`].
+ */
+int32_t parallax_dump_plan(Test *handle,
+                           const uint8_t *input,
+                           uint64_t input_len,
+                           uint8_t **result_out,
+                           uint64_t *result_len_out);
+
+/**
+ * Phase two of a dump: given the shell-fetched RPC response for the misses,
+ * write the store and install the fetched accounts. Returns a status only.
+ */
+int32_t parallax_dump_commit(Test *handle, const uint8_t *input, uint64_t input_len);
+
 #endif  /* PARALLAX_SVM_H */

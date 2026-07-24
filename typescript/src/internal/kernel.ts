@@ -105,6 +105,12 @@ const parallax_send = lib.func(
 const parallax_simulate = lib.func(
   "int32_t parallax_simulate(void *handle, const void *instructions, uint64_t instructions_len, const void *accounts, uint64_t accounts_len, _Out_ void **result_out, _Out_ uint64_t *result_len_out)",
 );
+const parallax_dump_plan = lib.func(
+  "int32_t parallax_dump_plan(void *handle, const void *input, uint64_t input_len, _Out_ void **result_out, _Out_ uint64_t *result_len_out)",
+);
+const parallax_dump_commit = lib.func(
+  "int32_t parallax_dump_commit(void *handle, const void *input, uint64_t input_len)",
+);
 
 function lastError(): string {
   return parallax_last_error() ?? "unknown error";
@@ -150,6 +156,21 @@ export interface WireOutcome {
   readonly logs: string[];
   readonly changes: WireChange[];
   readonly accounts: WireAccount[];
+  /** Guided-error hint (empty unless a failure named a missing dumped account). */
+  readonly hint: string;
+}
+
+/** One `(address, role)` dump target/miss. Role: 0 account, 1 program, 2 programdata. */
+export interface DumpTarget {
+  readonly address: Uint8Array;
+  readonly role: number;
+}
+
+/** The result of `dumpPlan`: the request body to POST and the misses it covers. */
+export interface DumpPlanResult {
+  /** JSON-RPC request body to POST, or empty when nothing needs fetching. */
+  readonly requestBody: Uint8Array;
+  readonly misses: DumpTarget[];
 }
 
 /** Wire tag for the owning token program (mirrors the Rust `TokenProgram`). */
@@ -220,6 +241,10 @@ class Writer {
   lengthPrefixed(value: Uint8Array): void {
     this.u32(value.length);
     this.bytes(value);
+  }
+
+  string(value: string): void {
+    this.lengthPrefixed(Buffer.from(value, "utf8"));
   }
 
   pubkey(value: Uint8Array): void {
@@ -419,7 +444,19 @@ function deserializeOutcome(buf: Buffer): WireOutcome {
     const after = r.bool() ? (byAddress.get(addressKey(address)) ?? null) : null;
     changes.push({ address, before, after });
   }
-  return { error, computeUnits, returnData, logs, changes, accounts };
+  const hint = r.string();
+  return { error, computeUnits, returnData, logs, changes, accounts, hint };
+}
+
+function deserializeDumpPlan(buf: Buffer): DumpPlanResult {
+  const r = new Reader(buf);
+  const requestBody = r.lengthPrefixed();
+  const count = r.u32();
+  const misses: DumpTarget[] = [];
+  for (let i = 0; i < count; i += 1) {
+    misses.push({ address: r.pubkey(), role: r.u8() });
+  }
+  return { requestBody, misses };
 }
 
 function deserializePubkeys(buf: Buffer): Uint8Array[] {
@@ -593,6 +630,54 @@ export class Kernel {
       [Buffer.from(address)],
       deserializeOptionalAccount,
     );
+  }
+
+  /**
+   * Phase one of a dump: install cache hits and return the request body for the
+   * misses (empty when the store already covers every target). The core owns
+   * the store and coherence; the shell only transports the returned body.
+   */
+  dumpPlan(
+    projectDir: string,
+    targets: readonly DumpTarget[],
+    syncClock: boolean,
+    refresh: boolean,
+  ): DumpPlanResult {
+    const w = new Writer();
+    w.string(projectDir);
+    w.bool(syncClock);
+    w.bool(refresh);
+    w.u32(targets.length);
+    for (const target of targets) {
+      w.pubkey(target.address);
+      w.u8(target.role);
+    }
+    const bytes = w.finish();
+    return this.#result(
+      parallax_dump_plan,
+      [bytes, BigInt(bytes.length)],
+      deserializeDumpPlan,
+    );
+  }
+
+  /** Phase two of a dump: hand back the fetched RPC response for the misses. */
+  dumpCommit(
+    projectDir: string,
+    misses: readonly DumpTarget[],
+    responseBody: Uint8Array,
+    syncClock: boolean,
+  ): void {
+    const w = new Writer();
+    w.string(projectDir);
+    w.bool(syncClock);
+    w.u32(misses.length);
+    for (const miss of misses) {
+      w.pubkey(miss.address);
+      w.u8(miss.role);
+    }
+    w.lengthPrefixed(responseBody);
+    const bytes = w.finish();
+    this.#check(parallax_dump_commit(this.#alive(), bytes, BigInt(bytes.length)));
   }
 
   send(

@@ -483,10 +483,18 @@ impl Test {
         let targets = if refresh {
             store.targets()?
         } else {
-            targets
-                .iter()
-                .map(|(address, code)| Role::from_code(*code).map(|role| (*address, role)))
-                .collect::<Result<Vec<_>, _>>()?
+            // A `Program` target expands to include its loader-v3 programdata, so
+            // the programdata derivation stays here in the core and no frontend
+            // (native or the FFI shell) has to reproduce it.
+            let mut expanded = Vec::new();
+            for (address, code) in targets {
+                let role = Role::from_code(*code)?;
+                expanded.push((*address, role));
+                if role == Role::Program {
+                    expanded.push((programdata_address(address), Role::ProgramData));
+                }
+            }
+            expanded
         };
 
         let mut hits = Vec::new();
@@ -664,13 +672,10 @@ impl Test {
     }
 
     /// Native path for `Dump::program`: dump the program account and its
-    /// loader-v3 programdata coherently, then load the program.
+    /// loader-v3 programdata coherently, then load the program. `dump_plan`
+    /// expands the `Program` target to include the programdata.
     pub(crate) fn dump_program_native(&mut self, program_id: Pubkey, sync_clock: bool) {
-        let targets = [
-            (program_id, ROLE_PROGRAM),
-            (programdata_address(&program_id), ROLE_PROGRAMDATA),
-        ];
-        self.run_dump_native(&targets, sync_clock, false);
+        self.run_dump_native(&[(program_id, ROLE_PROGRAM)], sync_clock, false);
     }
 
     /// Native path for `Dump::refresh_all`: re-fetch every known entry in one
@@ -680,7 +685,12 @@ impl Test {
         self.run_dump_native(&[], false, true)
     }
 
-    fn run_dump_native(&mut self, targets: &[(Pubkey, u8)], sync_clock: bool, refresh: bool) -> Vec<Pubkey> {
+    fn run_dump_native(
+        &mut self,
+        targets: &[(Pubkey, u8)],
+        sync_clock: bool,
+        refresh: bool,
+    ) -> Vec<Pubkey> {
         let dir = self.project_dir_string();
         let plan = self
             .dump_plan(&dir, targets, sync_clock, refresh)
@@ -1022,10 +1032,12 @@ mod tests {
         let programdata = programdata_address(&program);
         let mut test = world(&dir, Box::new(PanicTransport));
 
+        // Only the program id is passed; `dump_plan` expands it to include the
+        // programdata, so the shell never derives the programdata address.
         let plan = test
             .dump_plan(
                 &dir.to_string_lossy(),
-                &[(program, ROLE_PROGRAM), (programdata, ROLE_PROGRAMDATA)],
+                &[(program, ROLE_PROGRAM)],
                 false,
                 false,
             )

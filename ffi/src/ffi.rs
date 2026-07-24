@@ -438,8 +438,88 @@ pub extern "C" fn parallax_simulate(
 }
 
 // ---------------------------------------------------------------------------
+// Dump
+// ---------------------------------------------------------------------------
+
+/// Phase one of a dump: install cache hits and return the request body for the
+/// misses through `result_out`/`result_len_out` (see the wire `plan` result).
+/// An empty request body means the store already covered every target. Free the
+/// buffer with [`parallax_free_bytes`].
+#[unsafe(no_mangle)]
+pub extern "C" fn parallax_dump_plan(
+    handle: *mut Test,
+    input: *const u8,
+    input_len: u64,
+    result_out: *mut *mut u8,
+    result_len_out: *mut u64,
+) -> i32 {
+    with_result(
+        handle,
+        input,
+        input_len,
+        result_out,
+        result_len_out,
+        |test, bytes| {
+            let input = wire::deserialize_dump_plan_input(bytes)
+                .map_err(|e| format!("invalid dump plan input: {e}"))?;
+            let plan = test.dump_plan(
+                &input.project_dir,
+                &input.targets,
+                input.sync_clock,
+                input.refresh,
+            )?;
+            Ok(wire::serialize_dump_plan(&plan))
+        },
+    )
+}
+
+/// Phase two of a dump: given the shell-fetched RPC response for the misses,
+/// write the store and install the fetched accounts. Returns a status only.
+#[unsafe(no_mangle)]
+pub extern "C" fn parallax_dump_commit(handle: *mut Test, input: *const u8, input_len: u64) -> i32 {
+    with_input_status(handle, input, input_len, |test, bytes| {
+        let input = wire::deserialize_dump_commit_input(bytes)
+            .map_err(|e| format!("invalid dump commit input: {e}"))?;
+        test.dump_commit(
+            &input.project_dir,
+            &input.misses,
+            &input.response_body,
+            input.sync_clock,
+        )
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+/// Null-check and thread-check the handle, decode the input bytes, and run
+/// `body` for its side effects, returning a status code with no result blob.
+fn with_input_status<F>(handle: *mut Test, input: *const u8, input_len: u64, body: F) -> i32
+where
+    F: FnOnce(&mut Test, &[u8]) -> Result<(), String>,
+{
+    clear_last_error();
+    let handle = match resolve(handle) {
+        Ok(handle) => handle,
+        Err(code) => return code,
+    };
+    let bytes = match input_bytes(input, input_len) {
+        Ok(bytes) => bytes,
+        Err(code) => return code,
+    };
+    match catch_unwind(AssertUnwindSafe(|| body(&mut handle.test, bytes))) {
+        Ok(Ok(())) => PARALLAX_OK,
+        Ok(Err(message)) => {
+            set_last_error(message);
+            PARALLAX_ERR_INVALID_WIRE
+        }
+        Err(_) => {
+            set_last_error("panic during dump");
+            PARALLAX_ERR_INTERNAL
+        }
+    }
+}
 
 /// Reinterpret the opaque handle as its [`Handle`] box and enforce the
 /// creating-thread pin, returning the wrapped world or the status code to

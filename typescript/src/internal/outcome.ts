@@ -28,6 +28,8 @@ export interface RawExecutionResult {
   readonly computeUnits: bigint;
   readonly logs: readonly string[];
   readonly returnData: Uint8Array;
+  /** Guided-error hint (e.g. a missing dumped account); empty when none. */
+  readonly hint?: string;
 }
 
 export interface OutcomeAdapter<Address, Account> {
@@ -139,6 +141,7 @@ export class AccountChange<Address, Account> {
 export class Outcome<Address, Account> {
   readonly #error: ProgramError | null;
   readonly #accounts: ReadonlyMap<string, Account>;
+  readonly #hint: string;
   readonly computeUnits: bigint;
   readonly logs: readonly string[];
   readonly returnData: Uint8Array;
@@ -156,6 +159,7 @@ export class Outcome<Address, Account> {
         account,
       ]),
     );
+    this.#hint = result.hint ?? "";
     this.computeUnits = result.computeUnits;
     this.logs = [...result.logs];
     this.returnData = result.returnData.slice();
@@ -326,9 +330,10 @@ export class Outcome<Address, Account> {
   }
 
   private formattedLogs(): string {
-    return this.logs.length === 0
-      ? ""
-      : `\nprogram logs:\n  ${this.logs.join("\n  ")}`;
+    let formatted =
+      this.logs.length === 0 ? "" : `\nprogram logs:\n  ${this.logs.join("\n  ")}`;
+    if (this.#hint !== "") formatted += `\nhint: ${this.#hint}`;
+    return formatted;
   }
 }
 

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   rentMinimumBalance,
   TokenProgram,
@@ -8,6 +10,7 @@ import {
 import {
   Kernel,
   WireTokenProgram,
+  type DumpTarget,
   type WireAccount,
   type WireInstruction,
 } from "./kernel.js";
@@ -31,6 +34,34 @@ type Installed<Input> = Input extends readonly unknown[]
 export interface TestOptions {
   /** Maximum compute units available to one transaction. */
   readonly computeUnitLimit?: bigint;
+  /**
+   * RPC endpoint that `dump` fixtures fetch from on a store miss. Code-only and
+   * set once; unset, it defaults to the public mainnet-beta RPC. There is
+   * deliberately no environment override, mirroring the Rust `rpc` builder.
+   */
+  readonly rpc?: string;
+}
+
+/** Dump-target role codes; must match the Rust wire (`src/dump.rs`). */
+const DUMP_ROLE_ACCOUNT = 0;
+const DUMP_ROLE_PROGRAM = 1;
+
+/** Default RPC endpoint when `TestOptions.rpc` is unset. */
+const DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com";
+
+/**
+ * The project directory whose committed `.parallax/` store dumps read and
+ * write: the nearest ancestor of the working directory that has a
+ * `package.json`, mirroring the Rust harness's `Cargo.toml` walk-up.
+ */
+function resolveProjectDir(): string {
+  let dir = process.cwd();
+  for (;;) {
+    if (fs.existsSync(path.join(dir, "package.json"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return process.cwd();
+    dir = parent;
+  }
 }
 
 /**
@@ -69,6 +100,8 @@ export class TestCore<Address, Account, Instruction, Output>
   readonly #kernel: Kernel;
   readonly #adapter: HarnessAdapter<Address, Account, Instruction, Output>;
   readonly #primaryProgramId: Address | undefined;
+  readonly #rpc: string;
+  readonly #projectDir: string;
 
   protected constructor(
     adapter: HarnessAdapter<Address, Account, Instruction, Output>,
@@ -81,6 +114,8 @@ export class TestCore<Address, Account, Instruction, Output>
     }
     this.#adapter = adapter;
     this.#primaryProgramId = programId;
+    this.#rpc = options.rpc ?? DEFAULT_RPC_URL;
+    this.#projectDir = resolveProjectDir();
     let computeUnitLimit: bigint | null = null;
     if (options.computeUnitLimit !== undefined) {
       if (
@@ -206,6 +241,71 @@ export class TestCore<Address, Account, Instruction, Output>
   loadProgram(programId: Address, elf: Uint8Array): Address {
     this.#kernel.loadProgram(this.#adapter.addressToBytes(programId), elf);
     return programId;
+  }
+
+  // --- Dump (mainnet account/program dumping) -------------------------------
+  //
+  // The core owns the store, coherence, the RPC shape, and installation. The
+  // shell owns only the network transport: it POSTs the request body the core's
+  // `dumpPlan` returns and hands the response to `dumpCommit`. On a warm store
+  // there are no misses, so no fetch happens and the run is fully offline.
+
+  async dumpAccounts(
+    addresses: readonly Address[],
+    syncClock: boolean,
+  ): Promise<readonly Address[]> {
+    const targets: DumpTarget[] = addresses.map(address => ({
+      address: this.#adapter.addressToBytes(address),
+      role: DUMP_ROLE_ACCOUNT,
+    }));
+    await this.#resolveDump(targets, syncClock, false);
+    return addresses;
+  }
+
+  async dumpProgram(programId: Address, syncClock: boolean): Promise<Address> {
+    await this.#resolveDump(
+      [{ address: this.#adapter.addressToBytes(programId), role: DUMP_ROLE_PROGRAM }],
+      syncClock,
+      false,
+    );
+    return programId;
+  }
+
+  async refreshAll(): Promise<Address[]> {
+    const misses = await this.#resolveDump([], false, true);
+    return misses.map(miss => this.#adapter.bytesToAddress(miss.address));
+  }
+
+  async #resolveDump(
+    targets: DumpTarget[],
+    syncClock: boolean,
+    refresh: boolean,
+  ): Promise<DumpTarget[]> {
+    const plan = this.#kernel.dumpPlan(this.#projectDir, targets, syncClock, refresh);
+    if (plan.misses.length === 0) return [];
+    const response = await this.#fetchDump(plan.requestBody);
+    this.#kernel.dumpCommit(this.#projectDir, plan.misses, response, syncClock);
+    return plan.misses;
+  }
+
+  async #fetchDump(requestBody: Uint8Array): Promise<Uint8Array> {
+    const fetchImpl = globalThis.fetch;
+    if (typeof fetchImpl !== "function") {
+      throw new Error(
+        "parallax dump: global fetch is unavailable; Node 18+ or a fetch polyfill is required",
+      );
+    }
+    const response = await fetchImpl(this.#rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: requestBody,
+    });
+    if (!response.ok) {
+      throw new Error(
+        `parallax dump: RPC request to ${this.#rpc} failed with HTTP ${response.status}`,
+      );
+    }
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   // --- Account reads --------------------------------------------------------
@@ -371,6 +471,7 @@ export class TestCore<Address, Account, Instruction, Output>
       computeUnits: bundle.computeUnits,
       logs: bundle.logs,
       returnData: bundle.returnData,
+      hint: bundle.hint,
     };
     // Build each post-state account once. A change's `after` is the very same
     // wire account object (the bundle dedupes it), so reuse the built value

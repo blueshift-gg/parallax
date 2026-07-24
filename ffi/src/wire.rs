@@ -142,6 +142,48 @@
 //! [N]  data
 //! ```
 //!
+//! ## Dump — `parallax_dump_plan` / `parallax_dump_commit`
+//!
+//! Dump resolution is split into two synchronous calls so the async JS `fetch`
+//! transport lives entirely in the shell; the core owns the store, coherence,
+//! the JSON-RPC shape, and installation. `plan` reads the store, installs every
+//! cache hit, and returns the request body for the misses; the shell POSTs that
+//! body and hands the response to `commit`. A `target`/`miss` is a 32-byte
+//! address plus a one-byte **role** (`0` account, `1` program, `2` programdata).
+//!
+//! `plan` input:
+//!
+//! ```text
+//! string project_dir       // directory holding the committed `.parallax/`
+//! [1]    sync_clock (bool)
+//! [1]    refresh (bool)     // ignore `targets`, re-fetch every stored entry
+//! [4]    num_targets
+//! per target: [32] address + [1] role
+//! ```
+//!
+//! `plan` result:
+//!
+//! ```text
+//! [4] request_body_len     // 0 => nothing to fetch; hits already installed
+//! [N] request_body         // JSON-RPC getMultipleAccounts body to POST
+//! [4] num_misses
+//! per miss: [32] address + [1] role
+//! ```
+//!
+//! `commit` input (after the shell fetches the misses):
+//!
+//! ```text
+//! string project_dir
+//! [1]    sync_clock (bool)
+//! [4]    num_misses
+//! per miss: [32] address + [1] role
+//! [4]    response_body_len
+//! [N]    response_body      // raw JSON-RPC response bytes
+//! ```
+//!
+//! `commit` returns only a status code (it writes the store and installs the
+//! fetched accounts as a side effect).
+//!
 //! # Outputs
 //!
 //! ## Install result (returned by `install_mint`)
@@ -196,6 +238,10 @@
 //!   option<account> before     // absent => created by this transaction
 //!   [1]  after_present (bool)   // 1 => the post-state account listed above at
 //!                               //      this address; 0 => removed
+//! --- guided-error hint ---
+//! string hint                  // empty unless a failure named a missing dumped
+//!                              //  account (see `Dump`); appended by consumers
+//!                              //  to a failed-send message
 //! ```
 //!
 //! Post-state accounts precede changes deliberately: a changed account's
@@ -239,7 +285,8 @@
 //! `[1] version` byte here and branch on it; until then it would earn nothing.
 
 use parallax_svm::{
-    fixture::TokenProgram, Account, AccountMeta, Instruction, Outcome, ProgramError, Pubkey,
+    fixture::TokenProgram, Account, AccountMeta, DumpPlan, Instruction, Outcome, ProgramError,
+    Pubkey,
 };
 
 // ---------------------------------------------------------------------------
@@ -376,6 +423,22 @@ impl<'a> Reader<'a> {
         Ok(self.read_bytes(len)?.to_vec())
     }
 
+    fn read_string(&mut self) -> Result<String, &'static str> {
+        String::from_utf8(self.read_length_prefixed()?).map_err(|_| "invalid UTF-8 string")
+    }
+
+    /// Read a count-prefixed list of `(pubkey, role)` dump targets.
+    fn read_targets(&mut self) -> Result<Vec<(Pubkey, u8)>, &'static str> {
+        let count = self.read_count(TARGET_MIN_SIZE)?;
+        let mut targets = Vec::with_capacity(count);
+        for _ in 0..count {
+            let address = self.read_pubkey()?;
+            let role = self.read_u8()?;
+            targets.push((address, role));
+        }
+        Ok(targets)
+    }
+
     fn read_token_program(&mut self) -> Result<TokenProgram, &'static str> {
         match self.read_u8()? {
             0 => Ok(TokenProgram::Legacy),
@@ -492,6 +555,7 @@ const INSTRUCTION_MIN_SIZE: usize = 32 + 4 + 4; // program_id + data_len + num_m
 const META_MIN_SIZE: usize = 32 + 1 + 1; // pubkey + is_signer + is_writable
 const ACCOUNT_MIN_SIZE: usize = 32 + 32 + 8 + 4 + 1; // address + owner + lamports + data_len + executable
 const HOLDER_MIN_SIZE: usize = 32 + 8; // owner + amount
+const TARGET_MIN_SIZE: usize = 32 + 1; // address + role
 
 fn read_one_instruction(r: &mut Reader) -> Result<Instruction, &'static str> {
     let program_id = r.read_pubkey()?;
@@ -686,6 +750,62 @@ pub fn deserialize_raw_account_input(data: &[u8]) -> Result<RawAccountInput, &'s
     })
 }
 
+/// Decoded `parallax_dump_plan` input.
+pub struct DumpPlanInput {
+    /// Directory holding the committed `.parallax/` store.
+    pub project_dir: String,
+    /// Whether to adopt the dumped slot's clock.
+    pub sync_clock: bool,
+    /// Whether to re-fetch every stored entry (ignoring `targets`).
+    pub refresh: bool,
+    /// `(address, role)` dump targets.
+    pub targets: Vec<(Pubkey, u8)>,
+}
+
+/// Decode a `parallax_dump_plan` input bundle.
+pub fn deserialize_dump_plan_input(data: &[u8]) -> Result<DumpPlanInput, &'static str> {
+    let mut r = Reader::new(data);
+    let project_dir = r.read_string()?;
+    let sync_clock = r.read_bool()?;
+    let refresh = r.read_bool()?;
+    let targets = r.read_targets()?;
+    r.finish("trailing data after dump plan input")?;
+    Ok(DumpPlanInput {
+        project_dir,
+        sync_clock,
+        refresh,
+        targets,
+    })
+}
+
+/// Decoded `parallax_dump_commit` input.
+pub struct DumpCommitInput {
+    /// Directory holding the committed `.parallax/` store.
+    pub project_dir: String,
+    /// Whether to adopt the dumped slot's clock.
+    pub sync_clock: bool,
+    /// The `(address, role)` misses returned by `dump_plan`.
+    pub misses: Vec<(Pubkey, u8)>,
+    /// Raw JSON-RPC response bytes for those misses.
+    pub response_body: Vec<u8>,
+}
+
+/// Decode a `parallax_dump_commit` input bundle.
+pub fn deserialize_dump_commit_input(data: &[u8]) -> Result<DumpCommitInput, &'static str> {
+    let mut r = Reader::new(data);
+    let project_dir = r.read_string()?;
+    let sync_clock = r.read_bool()?;
+    let misses = r.read_targets()?;
+    let response_body = r.read_length_prefixed()?;
+    r.finish("trailing data after dump commit input")?;
+    Ok(DumpCommitInput {
+        project_dir,
+        sync_clock,
+        misses,
+        response_body,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Output encoding
 // ---------------------------------------------------------------------------
@@ -704,6 +824,19 @@ pub fn serialize_pubkeys(pubkeys: &[Pubkey]) -> Box<[u8]> {
 pub fn serialize_optional_account(account: Option<&Account>) -> Box<[u8]> {
     let mut w = Writer::new();
     w.write_option_account(account);
+    w.into_boxed_slice()
+}
+
+/// Encode a `parallax_dump_plan` result: the request body to POST (empty when
+/// nothing needs fetching) and the misses it covers.
+pub fn serialize_dump_plan(plan: &DumpPlan) -> Box<[u8]> {
+    let mut w = Writer::new();
+    w.write_length_prefixed(&plan.request_body);
+    w.write_len(plan.misses.len());
+    for (address, role) in &plan.misses {
+        w.write_pubkey(address);
+        w.write_u8(*role);
+    }
     w.into_boxed_slice()
 }
 
@@ -782,6 +915,9 @@ pub fn serialize_outcome(outcome: &Outcome) -> Box<[u8]> {
         w.write_option_account(change.before());
         w.write_bool(change.after().is_some());
     }
+
+    // Guided-error hint: empty unless a failure named a missing dumped account.
+    w.write_length_prefixed(outcome.hint().unwrap_or_default().as_bytes());
 
     w.into_boxed_slice()
 }
@@ -970,6 +1106,55 @@ mod tests {
 
         let none = serialize_optional_account(None);
         assert_eq!(&*none, &[0]);
+    }
+
+    #[test]
+    fn dump_plan_input_round_trips() {
+        let mut w = Writer::new();
+        w.write_length_prefixed(b"/tmp/project");
+        w.write_bool(true); // sync_clock
+        w.write_bool(false); // refresh
+        w.write_len(2);
+        w.write_pubkey(&pk(1));
+        w.write_u8(1); // program
+        w.write_pubkey(&pk(2));
+        w.write_u8(2); // programdata
+        let decoded = deserialize_dump_plan_input(&w.into_boxed_slice()).unwrap();
+        assert_eq!(decoded.project_dir, "/tmp/project");
+        assert!(decoded.sync_clock);
+        assert!(!decoded.refresh);
+        assert_eq!(decoded.targets, vec![(pk(1), 1), (pk(2), 2)]);
+    }
+
+    #[test]
+    fn dump_commit_input_round_trips() {
+        let mut w = Writer::new();
+        w.write_length_prefixed(b"/tmp/p");
+        w.write_bool(false); // sync_clock
+        w.write_len(1);
+        w.write_pubkey(&pk(3));
+        w.write_u8(0); // account
+        w.write_length_prefixed(b"{\"result\":null}");
+        let decoded = deserialize_dump_commit_input(&w.into_boxed_slice()).unwrap();
+        assert_eq!(decoded.project_dir, "/tmp/p");
+        assert!(!decoded.sync_clock);
+        assert_eq!(decoded.misses, vec![(pk(3), 0)]);
+        assert_eq!(decoded.response_body, b"{\"result\":null}");
+    }
+
+    #[test]
+    fn dump_plan_result_round_trips() {
+        let plan = DumpPlan {
+            request_body: b"body".to_vec(),
+            misses: vec![(pk(7), 1)],
+        };
+        let bytes = serialize_dump_plan(&plan);
+        let mut r = Reader::new(&bytes);
+        assert_eq!(r.read_length_prefixed().unwrap(), b"body");
+        assert_eq!(r.read_len().unwrap(), 1);
+        assert_eq!(r.read_pubkey().unwrap(), pk(7));
+        assert_eq!(r.read_u8().unwrap(), 1);
+        assert_eq!(r.remaining(), 0);
     }
 
     #[test]

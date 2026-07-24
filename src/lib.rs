@@ -51,6 +51,10 @@ mod setup;
 mod types;
 mod world;
 
+/// FFI support: the two-phase dump plan result. Not part of the stable surface.
+#[doc(hidden)]
+pub use dump::DumpPlan;
+
 pub use {
     outcome::Outcome,
     parallax_svm_derive::parallax_test,
