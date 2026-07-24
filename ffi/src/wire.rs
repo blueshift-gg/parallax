@@ -184,6 +184,18 @@
 //! `commit` returns only a status code (it writes the store and installs the
 //! fetched accounts as a side effect).
 //!
+//! ## `parallax_load` input
+//!
+//! Install accounts (or a program) from an already-dumped file. The core reads
+//! and parses the file (the same wincode format the store writes), so the shell
+//! only passes the path. Returns a count-prefixed pubkey list (the installed
+//! addresses; a single program id for `is_program`).
+//!
+//! ```text
+//! string path
+//! [1]    is_program (bool)   // true => Load::program, false => Load::accounts
+//! ```
+//!
 //! # Outputs
 //!
 //! ## Install result (returned by `install_mint`)
@@ -806,6 +818,24 @@ pub fn deserialize_dump_commit_input(data: &[u8]) -> Result<DumpCommitInput, &'s
     })
 }
 
+/// Decoded `parallax_load` input.
+pub struct LoadInput {
+    /// Path to the dump file to install from.
+    pub path: String,
+    /// Whether to load the file's program (`Load::program`) rather than its
+    /// accounts (`Load::accounts`).
+    pub is_program: bool,
+}
+
+/// Decode a `parallax_load` input bundle.
+pub fn deserialize_load_input(data: &[u8]) -> Result<LoadInput, &'static str> {
+    let mut r = Reader::new(data);
+    let path = r.read_string()?;
+    let is_program = r.read_bool()?;
+    r.finish("trailing data after load input")?;
+    Ok(LoadInput { path, is_program })
+}
+
 // ---------------------------------------------------------------------------
 // Output encoding
 // ---------------------------------------------------------------------------
@@ -1140,6 +1170,16 @@ mod tests {
         assert!(!decoded.sync_clock);
         assert_eq!(decoded.misses, vec![(pk(3), 0)]);
         assert_eq!(decoded.response_body, b"{\"result\":null}");
+    }
+
+    #[test]
+    fn load_input_round_trips() {
+        let mut w = Writer::new();
+        w.write_length_prefixed(b"fixtures/pool.dump");
+        w.write_bool(true);
+        let decoded = deserialize_load_input(&w.into_boxed_slice()).unwrap();
+        assert_eq!(decoded.path, "fixtures/pool.dump");
+        assert!(decoded.is_program);
     }
 
     #[test]

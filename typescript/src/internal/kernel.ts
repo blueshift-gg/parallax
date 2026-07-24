@@ -111,6 +111,9 @@ const parallax_dump_plan = lib.func(
 const parallax_dump_commit = lib.func(
   "int32_t parallax_dump_commit(void *handle, const void *input, uint64_t input_len)",
 );
+const parallax_load = lib.func(
+  "int32_t parallax_load(void *handle, const void *input, uint64_t input_len, _Out_ void **result_out, _Out_ uint64_t *result_len_out)",
+);
 
 function lastError(): string {
   return parallax_last_error() ?? "unknown error";
@@ -658,6 +661,19 @@ export class Kernel {
       [bytes, BigInt(bytes.length)],
       deserializeDumpPlan,
     );
+  }
+
+  /**
+   * Install accounts (or a program) from a dump file by path. The core reads
+   * and parses the file, so the shell only marshals the path across the wire.
+   * Returns the installed addresses.
+   */
+  load(path: string, isProgram: boolean): Uint8Array[] {
+    const w = new Writer();
+    w.string(path);
+    w.bool(isProgram);
+    const bytes = w.finish();
+    return this.#result(parallax_load, [bytes, BigInt(bytes.length)], deserializePubkeys);
   }
 
   /** Phase two of a dump: hand back the fetched RPC response for the misses. */

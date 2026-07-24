@@ -97,7 +97,7 @@ pub mod prelude {
     pub use crate::{
         co_signers,
         fixture::{
-            AssociatedTokenAccount, Dump, Fixture, Mint, Program, TokenAccount, TokenProgram,
+            AssociatedTokenAccount, Dump, Fixture, Load, Mint, Program, TokenAccount, TokenProgram,
             Wallet,
         },
         parallax_test, system_program, Account, AccountChange, AccountMeta, Instruction, Outcome,

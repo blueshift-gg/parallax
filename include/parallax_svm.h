@@ -225,4 +225,15 @@ int32_t parallax_dump_plan(Test *handle,
  */
 int32_t parallax_dump_commit(Test *handle, const uint8_t *input, uint64_t input_len);
 
+/**
+ * Install accounts (or a program) from a dump file by path, returning the
+ * installed addresses as a count-prefixed pubkey list through
+ * `result_out`/`result_len_out`. Free the buffer with [`parallax_free_bytes`].
+ */
+int32_t parallax_load(Test *handle,
+                      const uint8_t *input,
+                      uint64_t input_len,
+                      uint8_t **result_out,
+                      uint64_t *result_len_out);
+
 #endif  /* PARALLAX_SVM_H */

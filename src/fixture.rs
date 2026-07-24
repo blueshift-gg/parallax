@@ -1,6 +1,9 @@
 //! Composable fixtures for common Solana accounts and programs.
 
-use crate::{accounts, Account, Pubkey, Test, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID};
+use {
+    crate::{accounts, Account, Pubkey, Test, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID},
+    std::path::PathBuf,
+};
 
 /// State that can install itself into a test world.
 ///
@@ -425,6 +428,72 @@ impl Fixture for DumpRefresh {
 
     fn install(self, test: &mut Test) -> Self::Output {
         test.refresh_all_native()
+    }
+}
+
+/// Install accounts (or a program) from an already-dumped file at an explicit
+/// path — no store, no network, ever.
+///
+/// A dump file is the same wincode format the `.parallax/` store writes, so
+/// `Load` reads any file [`Dump`] produced: copy a file out of `.parallax/`
+/// (or commit it anywhere), and `Load` it by path to share fixtures across
+/// tests, machines, and languages.
+///
+/// ```rust,ignore
+/// use parallax_svm::prelude::*;
+///
+/// #[parallax_test]
+/// fn against_a_shared_dump(test: &mut Test) {
+///     let accounts = test.add(Load::accounts("fixtures/pool.dump"));
+///     test.add(Load::program("fixtures/amm.dump"));
+///     // ...
+/// }
+/// ```
+///
+/// [`Load::accounts`] returns every installed address; [`Load::program`] loads
+/// the program and returns its id.
+pub struct Load;
+
+impl Load {
+    /// Install every account in the dump file at `path`. Returns the installed
+    /// addresses (arity is the file's, known at runtime, so this is a `Vec`).
+    pub fn accounts(path: impl Into<PathBuf>) -> LoadAccounts {
+        LoadAccounts { path: path.into() }
+    }
+
+    /// Load the program in the dump file at `path` as a usable program. Returns
+    /// the program id.
+    pub fn program(path: impl Into<PathBuf>) -> LoadProgram {
+        LoadProgram { path: path.into() }
+    }
+}
+
+/// The [`Load::accounts`] fixture.
+pub struct LoadAccounts {
+    path: PathBuf,
+}
+
+impl Fixture for LoadAccounts {
+    type Output = Vec<Pubkey>;
+
+    fn install(self, test: &mut Test) -> Self::Output {
+        test.load_file_native(&self.path, false)
+    }
+}
+
+/// The [`Load::program`] fixture.
+pub struct LoadProgram {
+    path: PathBuf,
+}
+
+impl Fixture for LoadProgram {
+    type Output = Pubkey;
+
+    fn install(self, test: &mut Test) -> Self::Output {
+        test.load_file_native(&self.path, true)
+            .into_iter()
+            .next()
+            .expect("a program file loads exactly one program id")
     }
 }
 

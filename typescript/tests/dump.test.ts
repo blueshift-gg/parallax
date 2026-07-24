@@ -1,10 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +9,7 @@ import {
   type Address,
   type Instruction,
 } from "@solana/kit";
-import { Test as KitTest, dump } from "../src/kit.js";
+import { Test as KitTest, dump, load } from "../src/kit.js";
 
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
@@ -31,16 +25,21 @@ function makeProject(): string {
   return dir;
 }
 
-/** Pre-seed the committed `.parallax/accounts.json` store (a warm cache). */
-function seedStore(
-  dir: string,
-  accounts: Record<string, unknown>,
-): void {
-  mkdirSync(path.join(dir, ".parallax"), { recursive: true });
-  writeFileSync(
-    path.join(dir, ".parallax", "accounts.json"),
-    `${JSON.stringify({ version: 1, accounts }, null, 2)}\n`,
-  );
+/** A fetch stub returning `response` bytes; records how many times it ran. */
+function fetchReturning(response: Uint8Array): { calls: () => number } {
+  let calls = 0;
+  vi.stubGlobal("fetch", async () => {
+    calls += 1;
+    return { ok: true, arrayBuffer: async () => response.buffer };
+  });
+  return { calls: () => calls };
+}
+
+/** A fetch stub that fails the test if the network is touched at all. */
+function fetchThatThrows(): void {
+  vi.stubGlobal("fetch", () => {
+    throw new Error("this run must not touch the network");
+  });
 }
 
 /** A `getMultipleAccounts` response with the given per-address values. */
@@ -93,26 +92,19 @@ describe("dump fixture", () => {
   it("serves a warm store fully offline and deterministically", async () => {
     const project = makeProject();
     const target = addr(5);
-    seedStore(project, {
-      [target]: {
-        slot: 1000,
-        lamports: 777,
-        owner,
-        executable: false,
-        data: dataB64,
-      },
-    });
-    // The transport throws if a warm run ever touches the network.
-    vi.stubGlobal("fetch", () => {
-      throw new Error("a warm dump must not touch the network");
-    });
 
     await inProject(project, async () => {
+      // First world: a miss fetches once and writes the store.
+      fetchReturning(rpcResponse(1000, [{ lamports: 777, owner, data: dataB64 }]));
       const first = new KitTest();
+      const [a] = await first.add(dump({ accounts: [target] }));
+
+      // Second world: the store is warm, so any fetch is a failure.
+      fetchThatThrows();
       const second = new KitTest();
+      const [b] = await second.add(dump({ accounts: [target] }));
+
       try {
-        const [a] = await first.add(dump({ accounts: [target] }));
-        const [b] = await second.add(dump({ accounts: [target] }));
         expect(a).toBe(target);
         expect(b).toBe(target);
         const accountA = first.account(target);
@@ -157,7 +149,8 @@ describe("dump fixture", () => {
         ]);
         const account = test.account(target);
         expect(account!.data).toEqual(data);
-        expect(existsSync(path.join(project, ".parallax", "accounts.json"))).toBe(
+        // The store writes one self-contained `<address>.dump` file.
+        expect(existsSync(path.join(project, ".parallax", `${target}.dump`))).toBe(
           true,
         );
       } finally {
@@ -195,23 +188,48 @@ describe("dump fixture", () => {
     rmSync(project, { recursive: true, force: true });
   });
 
+  it("loads a dumped file by path, offline, into a fresh world", async () => {
+    const project = makeProject();
+    const target = addr(11);
+    // First, Dump writes `.parallax/<target>.dump` (a self-contained file).
+    await inProject(project, async () => {
+      vi.stubGlobal("fetch", async () => {
+        const bytes = rpcResponse(1600, [{ lamports: 55, owner, data: dataB64 }]);
+        return { ok: true, arrayBuffer: async () => bytes.buffer };
+      });
+      const test = new KitTest();
+      try {
+        await test.add(dump({ accounts: [target] }));
+      } finally {
+        test.free();
+      }
+    });
+    const file = path.join(project, ".parallax", `${target}.dump`);
+    expect(existsSync(file)).toBe(true);
+
+    // A fresh world (no store, no network) Loads that exact file by path.
+    vi.stubGlobal("fetch", () => {
+      throw new Error("Load must not touch the network");
+    });
+    const test = new KitTest();
+    try {
+      const loaded = await test.add(load({ path: file }));
+      expect(loaded).toEqual([target]);
+      const account = test.account(target);
+      expect(account!.lamports).toBe(55n);
+      expect(account!.data).toEqual(data);
+    } finally {
+      test.free();
+    }
+    rmSync(project, { recursive: true, force: true });
+  });
+
   it("attaches a guided hint when a send fails in a world with dumps", async () => {
     const project = makeProject();
     const target = addr(5);
-    seedStore(project, {
-      [target]: {
-        slot: 1,
-        lamports: 1,
-        owner,
-        executable: false,
-        data: "",
-      },
-    });
-    vi.stubGlobal("fetch", () => {
-      throw new Error("warm store must not fetch");
-    });
 
     await inProject(project, async () => {
+      fetchReturning(rpcResponse(1, [{ lamports: 1, owner, data: "" }]));
       const test = new KitTest();
       try {
         await test.add(dump({ accounts: [target] }));

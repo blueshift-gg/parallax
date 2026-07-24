@@ -118,6 +118,7 @@ export interface FixtureHost<Address> {
   ): Promise<readonly Address[]>;
   dumpProgram(programId: Address, syncClock: boolean): Promise<Address>;
   refreshAll(): Promise<Address[]>;
+  loadFile(path: string, isProgram: boolean): Address[];
 }
 
 /** Option-bag for `dump({ accounts, syncClock? })`. */
@@ -126,6 +127,12 @@ export interface DumpOptions<Address> {
   readonly accounts: readonly Address[];
   /** Adopt the dumped slot's clock. Opt-in; off by default. */
   readonly syncClock?: boolean;
+}
+
+/** Option-bag for `load({ path })`. */
+export interface LoadOptions {
+  /** Path to a dump file (the same format the `.parallax/` store writes). */
+  readonly path: string;
 }
 
 export function createFixtureFactories<
@@ -228,6 +235,28 @@ export function createFixtureFactories<
         },
         refreshAll(): Fixture<Address[], Host> {
           return { install: test => test.refreshAll() };
+        },
+      },
+    ),
+
+    // `load({ path })` installs accounts from an already-dumped file (the same
+    // format the store writes); `load.program(path)` loads a dumped program.
+    // No store, no network — the core reads and parses the file.
+    load: Object.assign(
+      (options: LoadOptions): Fixture<Address[], Host> => ({
+        install: test => test.loadFile(options.path, false),
+      }),
+      {
+        program(path: string): Fixture<Address, Host> {
+          return {
+            install: test => {
+              const [id] = test.loadFile(path, true);
+              if (id === undefined) {
+                throw new Error(`load: ${path} contains no program`);
+              }
+              return id;
+            },
+          };
         },
       },
     ),

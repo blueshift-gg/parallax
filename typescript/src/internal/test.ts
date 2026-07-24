@@ -276,6 +276,17 @@ export class TestCore<Address, Account, Instruction, Output>
     return misses.map(miss => this.#adapter.bytesToAddress(miss.address));
   }
 
+  // --- Load (install from an already-dumped file; no store, no network) -----
+  //
+  // One host method (`loadProgram(id, elf)` above is the unrelated program
+  // preload). The `load` factory maps the returned addresses to its shape.
+
+  loadFile(path: string, isProgram: boolean): Address[] {
+    return this.#kernel
+      .load(path, isProgram)
+      .map(bytes => this.#adapter.bytesToAddress(bytes));
+  }
+
   async #resolveDump(
     targets: DumpTarget[],
     syncClock: boolean,

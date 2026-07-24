@@ -64,14 +64,12 @@ spl-token = { version = "=9.0.0", default-features = false, features = ["no-entr
 ureq = { version = "2.12", optional = true, default-features = false, features = ["tls"] }
 # wincode 0.5 is the serialization substrate: a standard, not a framework. The
 # typed-state API (`read`/`read_at`/`write`/`has_state`) decodes and encodes an
-# account's data with wincode's `DefaultConfig`.
-wincode = "0.5"
+# account's data with wincode's `DefaultConfig`; the `Dump`/`Load` file format is
+# also wincode-derived, so a dumped file IS a shareable, loadable artifact.
+wincode = { version = "0.5", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"
-# The derive feature is used only by the crate's own unit tests, which define
-# small `SchemaRead`/`SchemaWrite` account types to exercise the typed-state API.
-wincode = { version = "0.5", features = ["derive"] }
 
 [workspace]
 members = ["derive", "ffi"]

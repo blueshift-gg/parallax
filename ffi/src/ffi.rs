@@ -489,6 +489,32 @@ pub extern "C" fn parallax_dump_commit(handle: *mut Test, input: *const u8, inpu
     })
 }
 
+/// Install accounts (or a program) from a dump file by path, returning the
+/// installed addresses as a count-prefixed pubkey list through
+/// `result_out`/`result_len_out`. Free the buffer with [`parallax_free_bytes`].
+#[unsafe(no_mangle)]
+pub extern "C" fn parallax_load(
+    handle: *mut Test,
+    input: *const u8,
+    input_len: u64,
+    result_out: *mut *mut u8,
+    result_len_out: *mut u64,
+) -> i32 {
+    with_result(
+        handle,
+        input,
+        input_len,
+        result_out,
+        result_len_out,
+        |test, bytes| {
+            let input = wire::deserialize_load_input(bytes)
+                .map_err(|e| format!("invalid load input: {e}"))?;
+            let addresses = test.load_dump(&input.path, input.is_program)?;
+            Ok(wire::serialize_pubkeys(&addresses))
+        },
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------

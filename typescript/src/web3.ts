@@ -13,6 +13,7 @@ import {
   type AssociatedTokenAccountOptions,
   type DumpOptions as SharedDumpOptions,
   type Fixture as SharedFixture,
+  type LoadOptions,
   type MintHolder as SharedMintHolder,
   type MintOptions as SharedMintOptions,
   type TokenAccountOptions as SharedTokenAccountOptions,
@@ -49,6 +50,7 @@ export type MintHolder = SharedMintHolder<Address>;
 export type TokenAccountOptions = SharedTokenAccountOptions<Address>;
 export type AccountOptions = SharedAccountOptions<Address>;
 export type DumpOptions = SharedDumpOptions<Address>;
+export type { LoadOptions };
 export type TestOptions = SharedTestOptions;
 
 /** Account metas for read-only co-signers, e.g. multisig signers. */
@@ -169,6 +171,7 @@ export const {
   account,
   associatedTokenAccount,
   dump,
+  load,
   mint,
   program,
   tokenAccount,
