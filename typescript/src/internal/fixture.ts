@@ -168,12 +168,22 @@ export function createFixtureFactories<
   // one wallet per address, `wallet({ count: N })` installs N fresh wallets, and
   // both yield `Address[]`; the bare option-bag stays singular.
   function wallet(
-    options: WalletOptions<Address> & { accounts: readonly Address[] },
+    options: WalletOptions<Address> & {
+      accounts: readonly Address[];
+      address?: never;
+      count?: never;
+    },
   ): Fixture<Address[], Host>;
   function wallet(
-    options: WalletOptions<Address> & { count: number },
+    options: WalletOptions<Address> & {
+      count: number;
+      address?: never;
+      accounts?: never;
+    },
   ): Fixture<Address[], Host>;
-  function wallet(options?: WalletOptions<Address>): Fixture<Address, Host>;
+  function wallet(
+    options?: WalletOptions<Address> & { accounts?: never; count?: never },
+  ): Fixture<Address, Host>;
   function wallet(
     options: WalletOptions<Address> = {},
   ): Fixture<Address, Host> | Fixture<Address[], Host> {
@@ -225,17 +235,25 @@ export function createFixtureFactories<
   function tokenAccount(
     mint: Address,
     owner: Address,
-    options: TokenAccountOptions<Address> & { accounts: readonly Address[] },
+    options: TokenAccountOptions<Address> & {
+      accounts: readonly Address[];
+      address?: never;
+      count?: never;
+    },
   ): Fixture<Address[], Host>;
   function tokenAccount(
     mint: Address,
     owner: Address,
-    options: TokenAccountOptions<Address> & { count: number },
+    options: TokenAccountOptions<Address> & {
+      count: number;
+      address?: never;
+      accounts?: never;
+    },
   ): Fixture<Address[], Host>;
   function tokenAccount(
     mint: Address,
     owner: Address,
-    options?: TokenAccountOptions<Address>,
+    options?: TokenAccountOptions<Address> & { accounts?: never; count?: never },
   ): Fixture<Address, Host>;
   function tokenAccount(
     mint: Address,

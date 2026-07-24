@@ -380,6 +380,11 @@ impl Fixture for TokenAccount {
 }
 
 /// An initialized token account at its associated-token address.
+///
+/// Deliberately has no `accounts` plural: an associated token address is a
+/// pure function of its owner and mint, so "several ATAs" only means several
+/// owners — and funding several owners of one mint is [`Mint::with_holder`]'s
+/// job.
 #[derive(Debug, Clone, Copy)]
 pub struct AssociatedTokenAccount {
     mint: Pubkey,
