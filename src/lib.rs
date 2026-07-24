@@ -431,4 +431,119 @@ mod tests {
             .succeeds()
             .has_lamports(cosigner, DEFAULT_WALLET_LAMPORTS);
     }
+
+    // Micro-benchmarks for the harness hot paths. These are `#[ignore]` so they
+    // never run in the ordinary suite; measure with
+    // `cargo test --release -- --ignored --nocapture bench_`.
+    mod bench {
+        use {super::*, std::time::Instant};
+
+        /// Time `iters` iterations of `body` and print nanoseconds per iteration.
+        fn report(name: &str, iters: u32, mut body: impl FnMut()) {
+            // Warm up caches and one-time allocations before timing.
+            for _ in 0..(iters / 8).max(1) {
+                body();
+            }
+            let start = Instant::now();
+            for _ in 0..iters {
+                body();
+            }
+            let per = start.elapsed().as_nanos() as f64 / f64::from(iters);
+            println!("{name}: {per:.0} ns/iter ({iters} iters)");
+        }
+
+        #[test]
+        #[ignore = "benchmark"]
+        fn bench_world_setup_with_fixtures() {
+            report("world_setup_16_fixtures", 2_000, || {
+                let mut test = empty_test();
+                let authority = test.add(Wallet::new());
+                let mint = test.add(Mint::new().with_authority(authority).supply(1_000));
+                for _ in 0..14 {
+                    let holder = test.add(Wallet::new());
+                    test.add(TokenAccount::new(mint, holder).amount(10));
+                }
+                std::hint::black_box(&test);
+            });
+        }
+
+        #[test]
+        #[ignore = "benchmark"]
+        fn bench_send_round_trip() {
+            let mut test = empty_test();
+            let payer = test.add(Wallet::new().fund(u64::MAX));
+            let recipient = Pubkey::new_from_array([9; 32]);
+            report("send_round_trip", 5_000, || {
+                std::hint::black_box(test.send(system_transfer(payer, recipient, 1)).is_ok());
+            });
+        }
+
+        #[test]
+        #[ignore = "benchmark"]
+        fn bench_outcome_construction() {
+            use crate::{backend::ExecutionResult, outcome::TrackedAccount};
+
+            // A representative tracked set: two writable accounts that changed,
+            // plus six read-only accounts (program, token program, sysvars,
+            // mint, authority) that could not, each carrying token-account-sized
+            // data.
+            let tracked_account = |seed: u8, writable: bool, changed: bool| {
+                let owner = Pubkey::new_from_array([1; 32]);
+                let before = Account::new(
+                    Pubkey::new_from_array([seed; 32]),
+                    owner,
+                    1_000,
+                    vec![seed; 165],
+                );
+                let after = changed.then(|| {
+                    let mut after = before.clone();
+                    after.lamports += 1;
+                    after
+                });
+                TrackedAccount {
+                    address: before.address,
+                    writable,
+                    signer: false,
+                    after: Some(after.unwrap_or_else(|| before.clone())),
+                    before: Some(before),
+                }
+            };
+
+            report("outcome_construction_8_accounts", 50_000, || {
+                let tracked = vec![
+                    tracked_account(1, true, true),
+                    tracked_account(2, true, true),
+                    tracked_account(3, false, false),
+                    tracked_account(4, false, false),
+                    tracked_account(5, false, false),
+                    tracked_account(6, false, false),
+                    tracked_account(7, false, false),
+                    tracked_account(8, false, false),
+                ];
+                let outcome =
+                    crate::Outcome::from_backend(ExecutionResult::for_test(1_400), tracked);
+                std::hint::black_box(outcome.account_changes().len());
+            });
+        }
+
+        #[test]
+        #[ignore = "benchmark"]
+        fn bench_typed_read() {
+            let mut test = empty_test();
+            let program = test.program_id();
+            let address = Pubkey::new_from_array([3; 32]);
+            test.write(
+                address,
+                program,
+                Vault {
+                    owner: [7; 32],
+                    amount: 1_000,
+                },
+            );
+            report("typed_read", 20_000, || {
+                let snapshot = test.read::<Vault>(address);
+                std::hint::black_box(snapshot.amount);
+            });
+        }
+    }
 }

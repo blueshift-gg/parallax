@@ -307,9 +307,10 @@ impl Test {
         // Actors that pay — payers, makers — are world state: install them
         // with [`crate::fixture::Wallet`].
         for account in &tracked {
-            if account.before.is_some()
-                || inputs.iter().any(|input| input.address == account.address)
-            {
+            // A present pre-state means the account is installed or was supplied
+            // as an explicit input, so it needs no backfill. Every remaining
+            // tracked address is unique and absent from `inputs`.
+            if account.before.is_some() {
                 continue;
             }
             if account.writable {
@@ -328,7 +329,16 @@ impl Test {
             account.after = if !succeeded {
                 account.before.clone()
             } else if commit {
-                self.backend.account(&account.address)
+                // An installed read-only account cannot change, so its committed
+                // post-state is its pre-state and needs no read back. Writable
+                // accounts may have changed, and a backfilled read-only signer (a
+                // co-signer with no pre-state) was seeded funded, so both are read
+                // from the store.
+                if account.writable || (account.signer && account.before.is_none()) {
+                    self.backend.account(&account.address)
+                } else {
+                    account.before.clone()
+                }
             } else {
                 // Simulation reports only writable accounts; a read-only
                 // account cannot change, so its pre-state is its post-state.

@@ -29,22 +29,33 @@ pub struct Outcome {
 
 impl Outcome {
     pub(crate) fn from_backend(result: ExecutionResult, tracked: Vec<TrackedAccount>) -> Self {
-        let error = result.error;
-        let mut accounts = tracked
-            .iter()
-            .filter_map(|account| account.after.clone())
-            .collect::<Vec<_>>();
-        accounts.sort_by_key(|account| account.address.to_bytes());
-        accounts.dedup_by_key(|account| account.address);
-
-        let changes = tracked
-            .into_iter()
-            .filter(|account| account.writable && account.before != account.after)
-            .map(|account| AccountChange::new(account.address, account.before, account.after))
-            .collect();
+        // Tracked addresses are unique, so the resulting set needs no dedup, and
+        // its order is never observed (accounts are looked up by address). A
+        // single pass moves each post-state into the resulting set, cloning only
+        // the changed writable accounts that also feed an `AccountChange`.
+        let mut accounts = Vec::with_capacity(tracked.len());
+        let mut changes = Vec::new();
+        for account in tracked {
+            let changed = account.writable && account.before != account.after;
+            match account.after {
+                Some(after) if changed => {
+                    accounts.push(after.clone());
+                    changes.push(AccountChange::new(
+                        account.address,
+                        account.before,
+                        Some(after),
+                    ));
+                }
+                Some(after) => accounts.push(after),
+                None if changed => {
+                    changes.push(AccountChange::new(account.address, account.before, None));
+                }
+                None => {}
+            }
+        }
 
         Self {
-            error,
+            error: result.error,
             compute_units: result.compute_units_consumed,
             logs: result.logs,
             return_data: result.return_data,

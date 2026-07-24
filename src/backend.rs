@@ -43,6 +43,19 @@ impl ExecutionResult {
             .iter()
             .find(|account| account.address == *address)
     }
+
+    /// A synthetic success result for benchmarking `Outcome` construction
+    /// without running the SVM.
+    #[cfg(test)]
+    pub(crate) fn for_test(compute_units_consumed: u64) -> Self {
+        Self {
+            error: None,
+            compute_units_consumed,
+            logs: Vec::new(),
+            return_data: Vec::new(),
+            post_accounts: Vec::new(),
+        }
+    }
 }
 
 pub(crate) struct Backend {
