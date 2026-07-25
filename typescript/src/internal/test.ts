@@ -94,9 +94,7 @@ function wireTokenProgram(tokenProgram: TokenProgram): WireTokenProgram {
     : WireTokenProgram.Legacy;
 }
 
-export class TestCore<Address, Account, Instruction, Output>
-  implements FixtureHost<Address>
-{
+export class TestCore<Address, Account, Instruction, Output> {
   readonly #kernel: Kernel;
   readonly #adapter: HarnessAdapter<Address, Account, Instruction, Output>;
   readonly #primaryProgramId: Address | undefined;
@@ -142,23 +140,41 @@ export class TestCore<Address, Account, Instruction, Output>
 
   async add<
     const Input extends
-      | Fixture<unknown, this>
-      | readonly Fixture<unknown, this>[],
+      | Fixture<unknown, this & FixtureHost<Address>>
+      | readonly Fixture<unknown, this & FixtureHost<Address>>[],
   >(input: Input): Promise<Installed<Input>> {
+    // The install plumbing (`installWallet`, `dumpAccounts`, …) is `protected`
+    // so it never reaches a consumer, but fixtures — free functions living
+    // outside the class — must still call it. The seam bridges the two: a
+    // fixture's `install(test)` is typed to `this & FixtureHost<Address>`, the
+    // concrete world with the plumbing widened back to public, and `add` (which
+    // has protected access) hands it exactly that view of `this`.
+    const host = this as this & FixtureHost<Address>;
     if (!Array.isArray(input)) {
-      return (await (input as Fixture<unknown, this>).install(this)) as Installed<Input>;
+      return (await (input as Fixture<unknown, this & FixtureHost<Address>>).install(
+        host,
+      )) as Installed<Input>;
     }
 
     const installed: unknown[] = [];
-    for (const fixture of input as readonly Fixture<unknown, this>[]) {
-      installed.push(await fixture.install(this));
+    for (const fixture of input as readonly Fixture<
+      unknown,
+      this & FixtureHost<Address>
+    >[]) {
+      installed.push(await fixture.install(host));
     }
     return installed as Installed<Input>;
   }
 
   // --- Fixture install surface (FixtureHost) --------------------------------
+  //
+  // These methods are the plumbing fixtures drive; they are `protected` so they
+  // stay off the public API surface (see `scripts/check-public-api.mjs`).
+  // Fixtures reach them through the `add` seam, which widens `this` to
+  // `this & FixtureHost<Address>`. `setAccount` and the exec/read/derive surface
+  // below stay public.
 
-  installWallet(address: Address | undefined, fund: bigint | undefined): Address {
+  protected installWallet(address: Address | undefined, fund: bigint | undefined): Address {
     return this.#adapter.bytesToAddress(
       this.#kernel.installWallet(
         address === undefined ? null : this.#adapter.addressToBytes(address),
@@ -167,7 +183,7 @@ export class TestCore<Address, Account, Instruction, Output>
     );
   }
 
-  installMint(options: MintInstall<Address>): Address {
+  protected installMint(options: MintInstall<Address>): Address {
     const [mint] = this.#kernel.installMint({
       authority:
         options.authority === undefined
@@ -188,7 +204,7 @@ export class TestCore<Address, Account, Instruction, Output>
     return this.#adapter.bytesToAddress(mint);
   }
 
-  installTokenAccount(
+  protected installTokenAccount(
     mint: Address,
     owner: Address,
     address: Address | undefined,
@@ -206,7 +222,7 @@ export class TestCore<Address, Account, Instruction, Output>
     );
   }
 
-  installAta(
+  protected installAta(
     mint: Address,
     owner: Address,
     amount: bigint,
@@ -222,7 +238,7 @@ export class TestCore<Address, Account, Instruction, Output>
     );
   }
 
-  installRawAccount(
+  protected installRawAccount(
     address: Address,
     owner: Address,
     lamports: bigint | undefined,
@@ -250,7 +266,7 @@ export class TestCore<Address, Account, Instruction, Output>
   // `dumpPlan` returns and hands the response to `dumpCommit`. On a warm store
   // there are no misses, so no fetch happens and the run is fully offline.
 
-  async dumpAccounts(
+  protected async dumpAccounts(
     addresses: readonly Address[],
     syncClock: boolean,
   ): Promise<readonly Address[]> {
@@ -262,7 +278,7 @@ export class TestCore<Address, Account, Instruction, Output>
     return addresses;
   }
 
-  async dumpProgram(programId: Address, syncClock: boolean): Promise<Address> {
+  protected async dumpProgram(programId: Address, syncClock: boolean): Promise<Address> {
     await this.#resolveDump(
       [{ address: this.#adapter.addressToBytes(programId), role: DUMP_ROLE_PROGRAM }],
       syncClock,
@@ -271,7 +287,7 @@ export class TestCore<Address, Account, Instruction, Output>
     return programId;
   }
 
-  async refreshAll(): Promise<Address[]> {
+  protected async refreshAll(): Promise<Address[]> {
     const misses = await this.#resolveDump([], false, true);
     return misses.map(miss => this.#adapter.bytesToAddress(miss.address));
   }
@@ -281,7 +297,7 @@ export class TestCore<Address, Account, Instruction, Output>
   // One host method (`loadProgram(id, elf)` above is the unrelated program
   // preload). The `load` factory maps the returned addresses to its shape.
 
-  loadFile(path: string, isProgram: boolean): Address[] {
+  protected loadFile(path: string, isProgram: boolean): Address[] {
     return this.#kernel
       .load(path, isProgram)
       .map(bytes => this.#adapter.bytesToAddress(bytes));

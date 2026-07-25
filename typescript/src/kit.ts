@@ -21,6 +21,7 @@ import {
   type AssociatedTokenAccountOptions,
   type DumpOptions as SharedDumpOptions,
   type Fixture as SharedFixture,
+  type FixtureHost,
   type LoadOptions,
   type MintHolder as SharedMintHolder,
   type MintOptions as SharedMintOptions,
@@ -192,7 +193,7 @@ export class Test extends TestCore<Address, WorldAccount, Instruction, Outcome> 
   }
 }
 
-const fixtures = createFixtureFactories<Address, Test>();
+const fixtures = createFixtureFactories<Address, Test & FixtureHost<Address>>();
 
 export const {
   account,
