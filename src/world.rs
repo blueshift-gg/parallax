@@ -175,6 +175,12 @@ impl Test {
     /// program wrote, decoded back into the client type. For a type whose
     /// schema covers only a suffix of the data, use [`Self::read_at`].
     ///
+    /// The schema frames bytes only and carries no ownership, so a read does not
+    /// check the account's owner. This differs from the TypeScript harness by
+    /// design: there, codecs carry and validate `owner` because generated
+    /// bundles are self-framing; in Rust owner stays an orthogonal
+    /// [`Outcome::owned_by`](crate::Outcome::owned_by) assertion.
+    ///
     /// # Trailing bytes
     ///
     /// `T` must consume the account. wincode reads exactly `T`'s bytes and

@@ -236,8 +236,11 @@ impl Outcome {
     /// decode path as [`Test::read`](crate::Test::read). Panics with the
     /// address and the wincode error when the account is absent or its bytes do
     /// not decode. Ownership is intentionally not checked here — pair with
-    /// [`Self::owned_by`] when that matters. Chainable, so several accounts can
-    /// be asserted in one expression.
+    /// [`Self::owned_by`] when that matters. This differs from the TypeScript
+    /// harness by design: TS codecs carry and validate `owner` because generated
+    /// bundles are self-framing; in Rust owner stays an orthogonal `owned_by`
+    /// assertion. Chainable, so several accounts can be asserted in one
+    /// expression.
     pub fn has_state<T>(&self, address: Pubkey, check: impl FnOnce(&T)) -> &Self
     where
         T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T>,

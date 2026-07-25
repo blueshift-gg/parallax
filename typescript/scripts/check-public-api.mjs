@@ -104,6 +104,7 @@ const EXPECTED = {
       "isErr",
       "isOk",
       "logs",
+      "ownedBy",
       "returnData",
       "returnValue",
       "succeeds",

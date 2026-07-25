@@ -368,6 +368,10 @@ export class TestCore<Address, Account, Instruction, Output> {
    * Read a typed account through its codec. Ownership, discriminator, and size
    * are validated before decoding; a missing account or any mismatch throws
    * with a precise message.
+   *
+   * The codec's optional `owner` is validated here because generated bundles
+   * are self-framing — the deliberate mirror of Rust `Test::read`, which frames
+   * bytes only, checks no owner, and pairs with an orthogonal `owned_by`.
    */
   read<Value>(codec: AccountCodec<Value, Address>, address: Address): Value {
     const account = this.account(address);

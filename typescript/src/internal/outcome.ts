@@ -230,6 +230,11 @@ export class Outcome<Address, Account> {
    * Decode a resulting account through a typed codec and run assertions against
    * it. Validates owner, discriminator, and size like `Test.read`, throwing on
    * mismatch; the closure asserts on the decoded state. Chainable.
+   *
+   * The codec's optional `owner` is validated here because generated bundles
+   * are self-framing — the deliberate mirror of Rust, where `has_state` decodes
+   * without checking ownership and pairs with an orthogonal `owned_by`. Use the
+   * standalone `ownedBy` when you want that same owner-only assertion in TS.
    */
   hasState<Value>(
     codec: AccountCodec<Value, Address>,
@@ -243,6 +248,22 @@ export class Outcome<Address, Account> {
       );
     }
     check(decodeAccount(codec, address, account, this.adapter));
+    return this;
+  }
+
+  /**
+   * Assert a resulting account is owned by `program`. Orthogonal to `hasState`,
+   * which decodes through the codec (and, when the codec carries `owner`, also
+   * validates ownership). Mirrors Rust `Outcome::owned_by`. Chainable.
+   */
+  ownedBy(address: Address, program: Address): this {
+    const account = this.requiredAccount(address);
+    const owner = this.adapter.accountOwner(account);
+    if (this.adapter.addressKey(owner) !== this.adapter.addressKey(program)) {
+      throw new Error(
+        `account ${this.adapter.renderAddress(address)} is owned by ${this.adapter.renderAddress(owner)}, expected ${this.adapter.renderAddress(program)}`,
+      );
+    }
     return this;
   }
 

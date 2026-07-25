@@ -334,15 +334,19 @@ describe("typed account ergonomics", () => {
       decode: (bytes: Uint8Array) => getTokenDecoder().decode(bytes),
     } satisfies KitAccountCodec<{ amount: bigint }>;
 
-    test
+    const outcome = test
       .send(transfer)
       .succeeds()
+      .ownedBy(alice, address(tokenProgram))
       .hasState(tokenCodec, alice, state =>
         expect(BigInt(state.amount)).toBe(4_000n),
       )
       .hasState(tokenCodec, bob, state =>
         expect(BigInt(state.amount)).toBe(1_000n),
       );
+
+    // ownedBy mirrors Rust's orthogonal owned_by: it checks owner alone.
+    expect(() => outcome.ownedBy(alice, kitAddr())).toThrow(/owned by/);
 
     expect(BigInt(test.read(tokenCodec, alice).amount)).toBe(4_000n);
     expect(() =>
