@@ -66,7 +66,7 @@ const EXPECTED = {
       "derivePdaWithBump",
       "free",
       "lamports",
-      "loadProgram",
+      "preloadProgram",
       "programId",
       "read",
       "send",
@@ -79,7 +79,7 @@ const EXPECTED = {
       "warpToTimestamp",
       "write",
     ],
-    static: ["load"],
+    static: ["open"],
   },
   Outcome: {
     instance: [

@@ -123,8 +123,14 @@ impl Test {
             .and_then(|account| decode(&account.data))
     }
 
-    /// Preload a program for cross-program invocations.
-    pub fn load_program(&mut self, program_id: Pubkey, elf: &[u8]) {
+    /// Preload a program's compiled **bytes** for cross-program invocations.
+    ///
+    /// Takes the program id and its in-memory ELF. Contrast with
+    /// [`Dump::program`](crate::fixture::Dump::program), which fetches a program
+    /// over the network, and
+    /// [`Load::program`](crate::fixture::Load::program), which reads one from a
+    /// dump file on disk.
+    pub fn preload_program(&mut self, program_id: Pubkey, elf: &[u8]) {
         self.backend.load_program(&program_id, elf);
     }
 

@@ -18,7 +18,7 @@ npm install --save-dev parallax-svm @solana/kit
 import { Test, wallet } from "parallax-svm/kit";
 import { PROGRAM_ADDRESS, VaultClient } from "./client/index.js";
 
-using test = await Test.load(PROGRAM_ADDRESS, "target/deploy/vault.so");
+using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/vault.so");
 const user = await test.add(wallet({ fund: 1_000_000n }));
 const client = new VaultClient();
 const deposit = await client.createDepositInstruction({ user, amount: 1_000n });
@@ -54,12 +54,15 @@ so a generated client's codec plugs straight into `read`, `write`, `hasState`,
 before/after state in instruction order.
 
 Pass `{ computeUnitLimit: 200_000n }` as the third `Test` constructor argument
-or `Test.load` option to set the same per-transaction ceiling as Rust's
+or `Test.open` option to set the same per-transaction ceiling as Rust's
 `Test::builder(...).compute_unit_limit(...)`.
 
-`Test.load(PROGRAM_ADDRESS)` reads `PARALLAX_PROGRAM_PATH`, the same environment
-variable the Rust harness uses to locate a freshly built program. Passing the
-ELF path explicitly keeps direct test-runner invocation straightforward.
+`Test.open(PROGRAM_ADDRESS, programPath?)` resolves the program artifact through
+a discovery chain, mirroring the Rust harness's `setup.rs`: an explicit
+`programPath` wins; otherwise `PARALLAX_PROGRAM_PATH`, the same environment
+variable the Rust harness uses to locate a freshly built program; failing both,
+an actionable error. Passing the ELF path explicitly keeps direct test-runner
+invocation straightforward.
 
 ## Native library
 

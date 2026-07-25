@@ -49,7 +49,7 @@ npm install --save-dev parallax-svm @solana/kit
 import { Test, wallet } from "parallax-svm/kit";
 import { PROGRAM_ADDRESS, VaultClient } from "./client/index.js";
 
-using test = await Test.load(PROGRAM_ADDRESS, "target/deploy/vault.so");
+using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/vault.so");
 const authority = await test.add(wallet());
 const deposit = await new VaultClient().createDepositInstruction({
   user: authority,

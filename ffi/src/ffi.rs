@@ -186,7 +186,7 @@ pub extern "C" fn parallax_load_program(
         let test = &mut handle.test;
         let id = Pubkey::new_from_array(unsafe { *program_id });
         let elf = unsafe { slice::from_raw_parts(elf, elf_len as usize) };
-        test.load_program(id, elf);
+        test.preload_program(id, elf);
     })) {
         Ok(()) => PARALLAX_OK,
         Err(_) => {

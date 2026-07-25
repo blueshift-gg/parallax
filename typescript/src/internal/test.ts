@@ -254,7 +254,12 @@ export class TestCore<Address, Account, Instruction, Output> {
     );
   }
 
-  loadProgram(programId: Address, elf: Uint8Array): Address {
+  /**
+   * Preload a program's compiled bytes for cross-program invocations. Contrast
+   * with the `dump`/`load` program fixtures, which pull a program from the
+   * network or a dump file. Mirrors Rust `Test::preload_program`.
+   */
+  preloadProgram(programId: Address, elf: Uint8Array): Address {
     this.#kernel.loadProgram(this.#adapter.addressToBytes(programId), elf);
     return programId;
   }
@@ -294,7 +299,7 @@ export class TestCore<Address, Account, Instruction, Output> {
 
   // --- Load (install from an already-dumped file; no store, no network) -----
   //
-  // One host method (`loadProgram(id, elf)` above is the unrelated program
+  // One host method (`preloadProgram(id, elf)` above is the unrelated program
   // preload). The `load` factory maps the returned addresses to its shape.
 
   protected loadFile(path: string, isProgram: boolean): Address[] {

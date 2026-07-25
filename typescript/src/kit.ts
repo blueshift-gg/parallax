@@ -179,17 +179,28 @@ export class Test extends TestCore<Address, WorldAccount, Instruction, Outcome> 
     super(adapter, programId, elf, options);
   }
 
-  static async load(
+  /**
+   * Open a world for a program discovered on disk. The artifact is resolved
+   * through a discovery chain, mirroring the Rust harness's `setup.rs`: an
+   * explicit `programPath` argument wins; otherwise the `PARALLAX_PROGRAM_PATH`
+   * environment variable (which a test runner sets to a freshly built
+   * artifact); failing both, an actionable error.
+   *
+   * Contrast with `preloadProgram`, which loads already-in-memory bytes, and
+   * the `dump`/`load` program fixtures, which pull from the network or a file.
+   */
+  static async open(
     programId: Address,
-    programPath = process.env.PARALLAX_PROGRAM_PATH,
+    programPath?: string,
     options?: TestOptions,
   ): Promise<Test> {
-    if (!programPath) {
+    const resolved = programPath ?? process.env.PARALLAX_PROGRAM_PATH;
+    if (!resolved) {
       throw new Error(
-        "PARALLAX_PROGRAM_PATH is not set; run through your test runner or pass an artifact path",
+        "no program artifact: pass a path to Test.open(id, path), or set PARALLAX_PROGRAM_PATH",
       );
     }
-    return new Test(programId, await readFile(programPath), options);
+    return new Test(programId, await readFile(resolved), options);
   }
 }
 

@@ -36,7 +36,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
   it("runs the Rust contract through the Kit adapter", async () => {
     const client = new KitVaultClient();
     const user = getAddressDecoder().decode(userBytes) as KitAddress;
-    using test = await KitTest.load(PROGRAM_ADDRESS, elfPath, {
+    using test = await KitTest.open(PROGRAM_ADDRESS, elfPath, {
       computeUnitLimit: 10_000n,
     });
     await test.add(kitWallet({ address: user }));
@@ -118,7 +118,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
       .hasLamports(vault, depositAmount);
     test.warpToTimestamp(42n);
 
-    using limited = await KitTest.load(PROGRAM_ADDRESS, elfPath, {
+    using limited = await KitTest.open(PROGRAM_ADDRESS, elfPath, {
       computeUnitLimit: 1n,
     });
     await limited.add(kitWallet({ address: user }));
@@ -130,7 +130,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
   it("runs the same contract through the Web3.js adapter", async () => {
     const client = new Web3VaultClient();
     const user = new Web3Address(userBytes);
-    using test = await Web3Test.load(Web3VaultClient.programId, elfPath, {
+    using test = await Web3Test.open(Web3VaultClient.programId, elfPath, {
       computeUnitLimit: 10_000n,
     });
     await test.add(web3Wallet({ address: user }));
@@ -211,7 +211,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
       .hasLamports(vault, depositAmount);
     test.warpToTimestamp(42n);
 
-    using limited = await Web3Test.load(Web3VaultClient.programId, elfPath, {
+    using limited = await Web3Test.open(Web3VaultClient.programId, elfPath, {
       computeUnitLimit: 1n,
     });
     await limited.add(web3Wallet({ address: user }));

@@ -136,7 +136,7 @@ export interface FixtureHost<Address> {
     lamports: bigint | undefined,
     data: Uint8Array,
   ): Address;
-  loadProgram(programId: Address, elf: Uint8Array): Address;
+  preloadProgram(programId: Address, elf: Uint8Array): Address;
   dumpAccounts(
     addresses: readonly Address[],
     syncClock: boolean,
@@ -321,7 +321,7 @@ export function createFixtureFactories<
 
     program(programId: Address, elf: Uint8Array): Fixture<Address, Host> {
       return {
-        install: test => test.loadProgram(programId, elf),
+        install: test => test.preloadProgram(programId, elf),
       };
     },
 

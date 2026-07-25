@@ -631,7 +631,7 @@ impl Fixture for Program<'_> {
     type Output = Pubkey;
 
     fn install(self, test: &mut Test) -> Self::Output {
-        test.load_program(self.id, self.elf);
+        test.preload_program(self.id, self.elf);
         self.id
     }
 }

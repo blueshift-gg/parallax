@@ -102,7 +102,7 @@ impl TestBuilder {
     /// under the id passed to [`Test::builder`](crate::Test::builder) and
     /// ignores [`Self::program_path`], [`Self::crate_name`], and
     /// [`PROGRAM_PATH_ENV`]. Additional programs are added afterwards with
-    /// [`Test::load_program`](crate::Test::load_program).
+    /// [`Test::preload_program`](crate::Test::preload_program).
     ///
     /// Empty bytes are equivalent to [`Self::no_program`].
     pub fn program_bytes(mut self, elf: impl Into<Vec<u8>>) -> Self {
@@ -117,7 +117,7 @@ impl TestBuilder {
     /// Use for tests that exercise only those built-ins — a bare token transfer,
     /// an account layout — without a program of their own, or when every program
     /// under test is added afterwards with
-    /// [`Test::load_program`](crate::Test::load_program). Like
+    /// [`Test::preload_program`](crate::Test::preload_program). Like
     /// [`Self::program_bytes`], this skips on-disk artifact discovery and the
     /// sibling CPI-bundle scan; the id passed to
     /// [`Test::builder`](crate::Test::builder) still names the world for PDA
