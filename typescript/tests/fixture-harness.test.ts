@@ -3,6 +3,8 @@ import {
   AccountRole,
   address,
   getAddressDecoder,
+  lamports,
+  type Account as KitAccount,
   type Address as KitAddress,
   type Instruction,
 } from "@solana/kit";
@@ -634,6 +636,72 @@ describe("writable-first account backfill", () => {
       .succeeds()
       .hasLamports(recipient, amount)
       .hasLamports(cosigner, DEFAULT_WALLET_LAMPORTS);
+  });
+});
+
+// The execution matrix is {send, simulate} x {one, all} x {plain, with}.
+// `send`/`sendAll`/`sendWith`/`simulate` are covered above; these exercise the
+// completions — `sendAllWith`, `simulateWith`, `simulateAll`, `simulateAllWith`
+// — one happy assertion each, mirroring the Rust matrix.
+describe("execution matrix completions", () => {
+  const amount = 1_000_000n;
+  const transfer = (from: KitAddress, to: KitAddress): Instruction => ({
+    programAddress: address(systemProgram),
+    accounts: [
+      { address: from, role: AccountRole.WRITABLE_SIGNER },
+      { address: to, role: AccountRole.WRITABLE },
+    ],
+    data: systemTransferData(amount),
+  });
+  const fundedSystemAccount = (addr: KitAddress): KitAccount<Uint8Array> => ({
+    address: addr,
+    programAddress: address(systemProgram),
+    lamports: lamports(DEFAULT_WALLET_LAMPORTS),
+    data: new Uint8Array(),
+    executable: false,
+    space: 0n,
+  });
+
+  it("simulateAll runs a chain without committing", async () => {
+    using test = new KitTest();
+    const payer = await test.add(kitWallet());
+    const first = kitAddr();
+    const second = kitAddr();
+    test
+      .simulateAll([transfer(payer, first), transfer(payer, second)])
+      .succeeds();
+    expect(test.account(first)).toBeNull();
+  });
+
+  it("sendAllWith seeds explicit inputs for a committed chain", async () => {
+    using test = new KitTest();
+    const payer = kitAddr(); // never installed
+    const recipient = kitAddr();
+    test
+      .sendAllWith([transfer(payer, recipient)], [fundedSystemAccount(payer)])
+      .succeeds()
+      .hasLamports(recipient, amount);
+  });
+
+  it("simulateWith seeds explicit inputs without committing", async () => {
+    using test = new KitTest();
+    const payer = kitAddr(); // never installed
+    const recipient = kitAddr();
+    expect(test.simulate(transfer(payer, recipient)).isErr()).toBe(true);
+    test
+      .simulateWith(transfer(payer, recipient), [fundedSystemAccount(payer)])
+      .succeeds();
+    expect(test.account(payer)).toBeNull();
+  });
+
+  it("simulateAllWith seeds explicit inputs for a simulated chain", async () => {
+    using test = new KitTest();
+    const payer = kitAddr(); // never installed
+    const recipient = kitAddr();
+    test
+      .simulateAllWith([transfer(payer, recipient)], [fundedSystemAccount(payer)])
+      .succeeds();
+    expect(test.account(payer)).toBeNull();
   });
 });
 

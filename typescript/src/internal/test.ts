@@ -455,8 +455,30 @@ export class TestCore<Address, Account, Instruction, Output> {
     return this.#execute([instruction], [...accounts], true);
   }
 
+  sendAllWith(
+    instructions: readonly Instruction[],
+    accounts: readonly Account[],
+  ): Output {
+    return this.#execute([...instructions], [...accounts], true);
+  }
+
   simulate(instruction: Instruction): Output {
     return this.#execute([instruction], [], false);
+  }
+
+  simulateWith(instruction: Instruction, accounts: readonly Account[]): Output {
+    return this.#execute([instruction], [...accounts], false);
+  }
+
+  simulateAll(instructions: readonly Instruction[]): Output {
+    return this.#execute([...instructions], [], false);
+  }
+
+  simulateAllWith(
+    instructions: readonly Instruction[],
+    accounts: readonly Account[],
+  ): Output {
+    return this.#execute([...instructions], [...accounts], false);
   }
 
   free(): void {

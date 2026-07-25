@@ -339,6 +339,20 @@ impl Test {
         self.execute([instruction.into()], Vec::new(), false)
     }
 
+    /// Simulate one instruction with raw transaction-input accounts, without
+    /// committing its changes.
+    ///
+    /// The simulation counterpart of [`Self::send_with`]: explicit `accounts`
+    /// seed or override world state for the transaction's inputs, but nothing
+    /// is committed.
+    pub fn simulate_with(
+        &mut self,
+        instruction: impl Into<Instruction>,
+        accounts: impl IntoIterator<Item = Account>,
+    ) -> Outcome {
+        self.execute([instruction.into()], accounts.into_iter().collect(), false)
+    }
+
     /// Simulate an atomic instruction sequence without committing its changes.
     ///
     /// The multi-instruction counterpart of [`Self::simulate`], mirroring

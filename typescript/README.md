@@ -48,7 +48,9 @@ Typed account state is read and written through a structural `AccountCodec`
 so a generated client's codec plugs straight into `read`, `write`, `hasState`,
 `accountAs`, `events`, and `returnValue`.
 
-`send`, `sendAll`, and `simulate` return `Outcome`. Its stable assertions are
+The execution matrix — `send` and `simulate`, each with an `…All`
+(instruction-chain) and a `…With` (explicit-input) variant, so `sendAllWith`,
+`simulateWith`, and the rest — returns `Outcome`. Its stable assertions are
 `succeeds`, `fails`, `failsWith`, `cuAtMost`, `hasLamports`, `hasTokens`,
 `hasSupply`, `hasState`, and `isClosed`; `accountChanges` reports writable
 before/after state in instruction order.

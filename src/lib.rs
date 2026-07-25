@@ -539,6 +539,35 @@ mod tests {
             .has_lamports(recipient, amount);
     }
 
+    // `simulate_with` seeds explicit transaction inputs like `send_with`, but
+    // commits nothing: a payer supplied only as an input lets the simulated
+    // transfer succeed, yet never enters the world afterwards.
+    #[test]
+    fn simulate_with_seeds_inputs_without_committing() {
+        let mut test = empty_test();
+        let payer = Pubkey::new_from_array([1; 32]);
+        let recipient = Pubkey::new_from_array([2; 32]);
+        let amount = 1_000_000;
+
+        // Uninstalled, the payer is an empty init target and the transfer fails.
+        assert!(test
+            .simulate(system_transfer(payer, recipient, amount))
+            .is_err());
+
+        // Seeded as an explicit input, the same transfer simulates successfully.
+        let funded = Account::new(
+            payer,
+            system_program::ID,
+            DEFAULT_WALLET_LAMPORTS,
+            Vec::new(),
+        );
+        test.simulate_with(system_transfer(payer, recipient, amount), [funded])
+            .succeeds();
+
+        // Simulation commits nothing, so the seeded payer never enters the world.
+        assert!(test.account(payer).is_none());
+    }
+
     // A read-only signer (a co-signer, e.g. a multisig member) is an actor
     // and enters funded, even though the world never installed it.
     #[test]
