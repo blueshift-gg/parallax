@@ -218,6 +218,16 @@ export class Outcome<Address, Account> {
     return this.#accounts.get(this.adapter.addressKey(address)) ?? null;
   }
 
+  /**
+   * Every tracked account's resulting post-state, in first-appearance
+   * instruction order. Accounts that no longer exist after execution are
+   * omitted; a removed writable account still surfaces through
+   * `accountChanges` with a `null` after. Mirrors Rust `Outcome::accounts`.
+   */
+  accounts(): Account[] {
+    return [...this.#accounts.values()];
+  }
+
   accountAs<Value>(
     address: Address,
     decode: (data: Uint8Array) => Value,

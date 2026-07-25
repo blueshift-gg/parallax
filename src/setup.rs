@@ -20,6 +20,7 @@ pub const PROGRAM_PATH_ENV: &str = "PARALLAX_PROGRAM_PATH";
 /// World setup: which program artifact to load and its runtime limits.
 ///
 /// Created by [`Test::builder`].
+#[must_use = "call .build() to construct the Test"]
 pub struct TestBuilder {
     pub(super) program_id: Pubkey,
     pub(super) compute_unit_limit: Option<u64>,

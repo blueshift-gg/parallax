@@ -248,6 +248,11 @@ impl Test {
     /// field, so no separate framing is needed. `owner` is explicit because the
     /// serialization substrate carries no ownership of its own. Returns
     /// `address`.
+    ///
+    /// Note the asymmetry with [`Self::read`], which takes only an address:
+    /// `owner` is required to *install* the account (every Solana account has
+    /// one) but is never validated by a read. Pair a read with
+    /// [`Outcome::owned_by`](crate::Outcome::owned_by) when ownership matters.
     pub fn write<T>(&mut self, address: Pubkey, owner: Pubkey, value: T) -> Pubkey
     where
         T: SchemaWrite<DefaultConfig, Src = T>,

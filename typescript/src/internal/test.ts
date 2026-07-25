@@ -405,6 +405,11 @@ export class TestCore<Address, Account, Instruction, Output> {
     return this.installRawAccount(address, codec.owner, undefined, bytes);
   }
 
+  /**
+   * Derive an associated-token address. `tokenProgram` defaults to `"legacy"` —
+   * an idiomatic TypeScript convenience; Rust `derive_ata` takes the token
+   * program explicitly.
+   */
   deriveAta(
     owner: Address,
     mint: Address,
@@ -443,6 +448,19 @@ export class TestCore<Address, Account, Instruction, Output> {
       throw new Error("timestamp must fit an i64");
     }
     this.#kernel.warpToTimestamp(timestamp);
+  }
+
+  /**
+   * Reconfigure the transaction compute-unit limit on an already-built world,
+   * preserving every loaded program and installed account. The constructor
+   * option `computeUnitLimit` is the build-time equivalent. Mirrors Rust
+   * `Test::set_compute_unit_limit`.
+   */
+  setComputeUnitLimit(limit: bigint): void {
+    if (limit < 0n || limit > 0xffff_ffff_ffff_ffffn) {
+      throw new Error("computeUnitLimit must fit a u64");
+    }
+    this.#kernel.setComputeUnitLimit(limit);
   }
 
   // --- Execution ------------------------------------------------------------

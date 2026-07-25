@@ -707,6 +707,25 @@ describe("execution matrix completions", () => {
       .succeeds();
     expect(test.account(payer)).toBeNull();
   });
+
+  it("reconfigures the compute-unit limit on a built world", async () => {
+    using test = new KitTest();
+    const payer = await test.add(kitWallet());
+    const recipient = kitAddr();
+    test.setComputeUnitLimit(1_000_000n); // ample headroom for a transfer
+    test.send(transfer(payer, recipient)).succeeds();
+    expect(() => test.setComputeUnitLimit(-1n)).toThrow(/u64/);
+  });
+
+  it("Outcome.accounts returns the full post-state set", async () => {
+    using test = new KitTest();
+    const payer = await test.add(kitWallet());
+    const recipient = kitAddr();
+    const outcome = test.send(transfer(payer, recipient)).succeeds();
+    const addresses = outcome.accounts().map(account => account.address);
+    expect(addresses).toContain(payer);
+    expect(addresses).toContain(recipient);
+  });
 });
 
 // Determinism is a product property: two fresh worlds running the identical
