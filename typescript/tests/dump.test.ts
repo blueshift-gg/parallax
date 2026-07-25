@@ -242,7 +242,7 @@ describe("dump fixture", () => {
         const outcome = test.send(failing);
         expect(outcome.isErr()).toBe(true);
         expect(() => outcome.succeeds()).toThrow(/missing account/);
-        expect(() => outcome.succeeds()).toThrow(/Dump::accounts/);
+        expect(() => outcome.succeeds()).toThrow(/dump accounts fixture/);
       } finally {
         test.free();
       }

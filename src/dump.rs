@@ -906,8 +906,8 @@ fn coherence_warning(slots: &[u64], threshold: u64) -> Option<String> {
 pub(crate) fn missing_account_hint(missing: Option<Pubkey>) -> Option<String> {
     missing.map(|address| {
         format!(
-            "missing account {address} — if it exists on mainnet, add it to \
-             Dump::accounts([...])"
+            "missing account {address}: if it exists on mainnet, add it to your \
+             dump accounts fixture"
         )
     })
 }
@@ -1178,7 +1178,7 @@ mod tests {
             .hint()
             .expect("a dumped world attaches a guided hint");
         assert!(hint.contains(&bogus.to_string()));
-        assert!(hint.contains("Dump::accounts"));
+        assert!(hint.contains("dump accounts fixture"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
