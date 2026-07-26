@@ -150,7 +150,7 @@ const adapter: HarnessAdapter<
 };
 
 /** The built-in fact namespaces for `check([..])` and `invariant(..)`. */
-export const { Cu, Account, Mint, TokenAccount, ReturnData, Changes } =
+export const { Cu, Account, Mint, TokenAccount, ReturnData } =
   createChecks(adapter);
 
 /** An isolated fixture-first test world using Web3.js address and account types. */

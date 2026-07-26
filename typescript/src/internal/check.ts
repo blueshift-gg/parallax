@@ -25,10 +25,14 @@ export interface Checks<Address, Account> {
     /** The owner of the account: `Account.owner(vault).eq(programId)`. */
     owner(address: Address): {
       eq(program: Address): Check<Address, Account>;
+      /** Pipe the owner into a closure. */
+      with(check: (owner: Address) => void): Check<Address, Account>;
     };
     /** The raw data bytes of the account — the raw sibling of `state`. */
     data(address: Address): {
       eq(expected: Uint8Array | readonly number[]): Check<Address, Account>;
+      /** Pipe the raw data bytes into a closure. */
+      with(check: (data: Uint8Array) => void): Check<Address, Account>;
     };
     /**
      * The typed state of the account, decoded through a generated codec — the
@@ -63,14 +67,8 @@ export interface Checks<Address, Account> {
   /** Transaction return-data facts. */
   readonly ReturnData: {
     eq(expected: Uint8Array | readonly number[]): Check<Address, Account>;
-  };
-  /**
-   * The transaction-scoped changed-set fact; per-account lifecycle facts
-   * (`created`/`removed`/`closed`) live on `Account`.
-   */
-  readonly Changes: {
-    /** Assert the exact changed set, in first-appearance order. */
-    eq(addresses: readonly Address[]): Check<Address, Account>;
+    /** Pipe the return data into a closure. */
+    with(check: (data: Uint8Array) => void): Check<Address, Account>;
   };
 }
 
@@ -81,6 +79,8 @@ export interface Comparators<Address, Account> {
   lt(expected: bigint | number): Check<Address, Account>;
   ge(expected: bigint | number): Check<Address, Account>;
   gt(expected: bigint | number): Check<Address, Account>;
+  /** Pipe the measured value into a closure, map-style. */
+  with(check: (value: bigint) => void): Check<Address, Account>;
 }
 
 type Op = "==" | "<=" | "<" | ">=" | ">";
@@ -193,6 +193,7 @@ export function createChecks<Address, Account>(
       lt: make("<"),
       ge: make(">="),
       gt: make(">"),
+      with: check => outcome => check(read(outcome)),
     };
   };
 
@@ -212,6 +213,10 @@ export function createChecks<Address, Account>(
     Account: {
       lamports: accountValue("lamports", adapter.lamports),
       owner: address => ({
+        with:
+          (check): C =>
+          outcome =>
+            check(adapter.accountOwner(requiredAccount(outcome, address))),
         eq: (program): C => outcome => {
           const owner = adapter.accountOwner(requiredAccount(outcome, address));
           if (adapter.addressKey(owner) !== adapter.addressKey(program)) {
@@ -222,6 +227,10 @@ export function createChecks<Address, Account>(
         },
       }),
       data: address => ({
+        with:
+          (check): C =>
+          outcome =>
+            check(adapter.accountData(requiredAccount(outcome, address))),
         eq: (expected): C => outcome => {
           const data = adapter.accountData(requiredAccount(outcome, address));
           if (!bytesEqual(data, expected)) {
@@ -286,30 +295,14 @@ export function createChecks<Address, Account>(
       amount: accountValue("token balance", adapter.tokenAmount),
     },
     ReturnData: {
+      with:
+        (check): C =>
+        outcome =>
+          check(outcome.returnData),
       eq: (expected): C => outcome => {
         if (!bytesEqual(outcome.returnData, expected)) {
           throw new Error(
             `unexpected return data: expected ${describeBytes(expected)}, got ${describeBytes(outcome.returnData)}`,
-          );
-        }
-      },
-    },
-    Changes: {
-      eq: (addresses): C => outcome => {
-        const actual = outcome.accountChanges.map(change =>
-          adapter.addressKey(change.address),
-        );
-        const expected = addresses.map(address => adapter.addressKey(address));
-        if (
-          actual.length !== expected.length ||
-          actual.some((key, index) => key !== expected[index])
-        ) {
-          throw new Error(
-            `unexpected changed-account set (first-appearance order): expected [${addresses
-              .map(address => adapter.renderAddress(address))
-              .join(", ")}], got [${outcome.accountChanges
-              .map(change => adapter.renderAddress(change.address))
-              .join(", ")}]`,
           );
         }
       },

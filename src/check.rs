@@ -10,8 +10,8 @@
 //! test.send(deposit).succeeds().check([
 //!     Cu::spent().le(5_000),
 //!     Account::lamports(vault).eq(amount),
-//!     Changes::eq([signer, vault]),
-//!     Changes::created(vault),
+//!     Account::lamports(signer).with(|l| assert!(l > 0)),
+//!     Account::created(vault),
 //! ]);
 //! ```
 //!
@@ -38,7 +38,9 @@ use {
 /// compare: [`Cu::spent`], [`Account::lamports`](crate::Account::lamports) and
 /// its siblings (`owner`/`data`/`state`/`created`/`removed`/`closed`),
 /// [`TokenAccount::amount`](crate::fixture::TokenAccount::amount)/[`Mint::supply`](crate::fixture::Mint::supply),
-/// plus the transaction-scoped [`ReturnData`] and [`Changes`]. Closures,
+/// plus the transaction-scoped [`ReturnData`]. Every bound fact compares
+/// (`eq`, and `le`/`lt`/`ge`/`gt` where numeric) or pipes its measured value
+/// into a closure (`with`). Closures over the whole outcome,
 /// arrays, and tuples of checks all qualify, and applications implement the
 /// trait to name their own invariants:
 ///
@@ -168,7 +170,6 @@ enum Inner {
     Owner(Pubkey, Pubkey),
     Data(Pubkey, Vec<u8>),
     ReturnData(Vec<u8>),
-    ChangesEq(Vec<Pubkey>),
     Created(Pubkey),
     Removed(Pubkey),
     Closed(Pubkey),
@@ -211,17 +212,6 @@ impl Check for Assert {
             }
             Inner::ReturnData(expected) => {
                 assert_eq!(outcome.return_data(), expected, "unexpected return data");
-            }
-            Inner::ChangesEq(expected) => {
-                let actual: Vec<Pubkey> = outcome
-                    .account_changes()
-                    .iter()
-                    .map(|change| change.address())
-                    .collect();
-                assert_eq!(
-                    actual, *expected,
-                    "unexpected changed-account set (first-appearance order)"
-                );
             }
             Inner::Created(address) => {
                 assert!(
@@ -278,9 +268,19 @@ fn change(outcome: &Outcome, address: Pubkey) -> &crate::AccountChange {
 /// finish it into an [`Assert`].
 pub struct Measure(MeasureSource);
 
+#[derive(Clone, Copy)]
 enum MeasureSource {
     Cu,
     Account(AccountValue, Pubkey),
+}
+
+impl MeasureSource {
+    fn read(self, outcome: &Outcome) -> u64 {
+        match self {
+            Self::Cu => outcome.compute_units(),
+            Self::Account(value, address) => value.read(required(outcome, address)),
+        }
+    }
 }
 
 impl Measure {
@@ -314,6 +314,15 @@ impl Measure {
     /// Assert the measured value is above `expected`.
     pub fn gt(self, expected: u64) -> Assert {
         self.finish(Cmp::Gt, expected)
+    }
+
+    /// Pipe the measured value into a closure, for facts the comparators
+    /// cannot spell: `Account::lamports(user).with(|l| assert!(l > rent))`.
+    pub fn with(self, check: impl Fn(u64) + 'static) -> Assert {
+        let source = self.0;
+        Assert(Inner::Dyn(Box::new(move |outcome| {
+            check(source.read(outcome))
+        })))
     }
 }
 
@@ -401,6 +410,14 @@ impl OwnerMeasure {
     pub fn eq(self, program: Pubkey) -> Assert {
         Assert(Inner::Owner(self.0, program))
     }
+
+    /// Pipe the owner into a closure.
+    pub fn with(self, check: impl Fn(Pubkey) + 'static) -> Assert {
+        let address = self.0;
+        Assert(Inner::Dyn(Box::new(move |outcome| {
+            check(required(outcome, address).owner)
+        })))
+    }
 }
 
 /// A bound raw-data fact awaiting its expected bytes.
@@ -410,6 +427,14 @@ impl DataMeasure {
     /// Assert the account's exact raw data bytes.
     pub fn eq(self, expected: impl Into<Vec<u8>>) -> Assert {
         Assert(Inner::Data(self.0, expected.into()))
+    }
+
+    /// Pipe the raw data bytes into a closure.
+    pub fn with(self, check: impl Fn(&[u8]) + 'static) -> Assert {
+        let address = self.0;
+        Assert(Inner::Dyn(Box::new(move |outcome| {
+            check(&required(outcome, address).data)
+        })))
     }
 }
 
@@ -455,6 +480,13 @@ impl ReturnData {
     pub fn eq(expected: impl Into<Vec<u8>>) -> Assert {
         Assert(Inner::ReturnData(expected.into()))
     }
+
+    /// Pipe the return data into a closure.
+    pub fn with(check: impl Fn(&[u8]) + 'static) -> Assert {
+        Assert(Inner::Dyn(Box::new(move |outcome| {
+            check(outcome.return_data())
+        })))
+    }
 }
 
 fn decode<T>(outcome: &Outcome, address: Pubkey) -> T
@@ -463,17 +495,4 @@ where
 {
     let account = required(outcome, address);
     crate::world::decode::<T>("state", address, &account.data, 0)
-}
-
-/// The transaction-scoped changed-set fact. Per-account lifecycle facts
-/// ([`created`](crate::Account::created), [`removed`](crate::Account::removed),
-/// [`closed`](crate::Account::closed)) live on `Account`.
-pub struct Changes;
-
-impl Changes {
-    /// Assert the exact set of accounts this transaction changed, in
-    /// first-appearance order: `Changes::eq([signer, vault])`.
-    pub fn eq(addresses: impl Into<Vec<Pubkey>>) -> Assert {
-        Assert(Inner::ChangesEq(addresses.into()))
-    }
 }

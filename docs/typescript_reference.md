@@ -120,7 +120,7 @@ The verdict is a method; every other assertion is a **check value** passed to
 `check`, mirroring Rust — name the fact, bind its subject, then compare:
 
 ```ts
-import { Account, Changes, Cu, Token } from "parallax-svm/kit";
+import { Account, Cu, Mint, TokenAccount } from "parallax-svm/kit";
 
 test
   .send(withdraw)
@@ -129,9 +129,8 @@ test
     Cu.spent().le(20_000n),
     Account.lamports(recipient).eq(1_000_000n),
     Account.owner(vault).eq(test.programId),
-    TokenAccount.with_amount(userAta).eq(600n),
-    Mint.with_supply(mint).eq(1_000n),
-    Changes.eq([user, vault]),                 // the exact changed set, in order
+    TokenAccount.amount(userAta).eq(600n),
+    Mint.supply(mint).eq(1_000n),
     Account.created(vault),
     Account.state(VaultCodec, vault).eq({ authority, amount: 600n }),
   ]);
@@ -140,9 +139,10 @@ test
 The namespaces mirror Rust exactly — `Cu.spent()`, `Account.lamports(addr)`,
 `Account.owner(addr).eq`, `Account.data(addr).eq`,
 `Account.state(codec, addr).eq` (deep equality) / `.with(cb)`,
-`TokenAccount.with_amount(addr)` / `Mint.with_supply(mint)`, `ReturnData.eq`, and
-`Changes.eq/created/removed/closed`; numeric facts take `eq, le, lt, ge, gt`.
-In TypeScript a check is simply a function of the outcome.
+`Account.created/removed/closed(addr)`, `TokenAccount.amount(addr)` /
+`Mint.supply(mint)`, and `ReturnData.eq`; numeric facts take
+`eq, le, lt, ge, gt`, and every bound fact pipes its value into a closure
+with `.with(..)`. In TypeScript a check is simply a function of the outcome.
 
 ### Custom checks and invariants
 

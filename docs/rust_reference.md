@@ -190,7 +190,7 @@ test.send(withdraw)
         Account::owner(vault).eq(program_id),
         TokenAccount::amount(user_ata).eq(600),
         Mint::supply(mint).eq(1_000),
-        Changes::eq([user, vault]),               // the exact changed set, in order
+        Account::lamports(user).with(|l| assert!(l > 0)),   // or pipe the value
         Account::created(vault),
     ])
     .check(Account::state(vault).eq(VaultState { authority, amount: 600 }));
@@ -208,11 +208,12 @@ The fact namespaces:
 | `TokenAccount::amount(addr)` / `Mint::supply(mint)` | `eq, le, lt, ge, gt (n)` |
 | `ReturnData` | `eq(bytes)` |
 | `Account::created/removed/closed (addr)` | lifecycle facts from the change set |
-| `Changes` | `eq([addrs])` — the exact changed set, in order |
 
 Every constructor returns the same concrete `Assert` type, which is why a
-plain array works. `Account::state(..).eq` decodes through the type's wincode
-schema and fails with the full decoded/expected pair; `Changes::closed`
+plain array works — and every bound fact also pipes its measured value into a
+closure with `.with(..)`, map-style, for anything the comparators cannot
+spell. `Account::state(..).eq` decodes through the type's wincode
+schema and fails with the full decoded/expected pair; `Account::closed`
 asserts Solana's closed-account state (removed entirely, or retained empty
 and system-owned). The fixture nouns measure themselves: `Mint` installs mints
 and asserts their supply, `TokenAccount` installs token accounts and asserts

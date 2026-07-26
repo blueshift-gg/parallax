@@ -99,14 +99,14 @@ test.send(withdraw)
         Account::data(addr).eq(bytes),
         TokenAccount::amount(ata).eq(n), Mint::supply(mint).eq(n),
         ReturnData::eq(bytes),
-        Changes::eq([user, vault]),      // exact changed set, in order
         Account::created(vault),         // and removed(a) / closed(a)
+        Account::lamports(addr).with(|l| assert!(l > 0)),  // or pipe any value
     ])
     .check(Account::state(vault).eq(Vault { authority, amount: 600 }));  // typed, T inferred
 ```
 
 TS mirrors every namespace (`Cu.spent().le`, `Account.lamports(a).eq`,
-`Account.state(codec, addr).eq(value)`, `Changes.eq([..])`).
+`Account.state(codec, addr).eq(value)`).
 `Account::state(addr).with::<T>(|s| ..)` asserts partial facts.
 
 Reads (not asserts): `account(addr)`, `accounts()`, `logs()`, `return_value()`,

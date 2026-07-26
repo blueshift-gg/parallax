@@ -244,8 +244,12 @@ pub(crate) fn mint_supply(account: &Account) -> u64 {
 mod tests {
     use {
         super::*,
-        crate::{Changes, Cu, ReturnData},
+        crate::{Cu, ReturnData},
     };
+
+    fn outcome_with_cu(compute_units: u64) -> Outcome {
+        outcome(&[], compute_units)
+    }
 
     fn outcome(logs: &[&str], compute_units: u64) -> Outcome {
         Outcome {
@@ -399,6 +403,22 @@ mod tests {
         ]);
     }
 
+    // Every bound fact also pipes its measured value into a closure — the
+    // map-shaped sibling of the comparators, grouping in the same arrays.
+    #[test]
+    fn bound_facts_pipe_their_value_into_closures() {
+        let address = Pubkey::new_from_array([5; 32]);
+        let owner = Pubkey::new_from_array([9; 32]);
+        let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2]));
+
+        outcome.check([
+            Account::lamports(address).with(|lamports| assert_eq!(lamports, 42)),
+            Account::owner(address).with(move |program| assert_eq!(program, owner)),
+            Account::data(address).with(|data| assert_eq!(data, [1, 2])),
+        ]);
+        outcome_with_cu(10).check(Cu::spent().with(|cu| assert_eq!(cu, 10)));
+    }
+
     #[test]
     #[should_panic(expected = "outcome does not contain account")]
     fn account_facts_name_a_missing_account() {
@@ -414,7 +434,7 @@ mod tests {
         let mut outcome = state_outcome(created.clone());
         outcome.changes = vec![crate::AccountChange::new(address, None, Some(created))];
 
-        outcome.check([Changes::eq([address]), Account::created(address)]);
+        outcome.check(Account::created(address));
     }
 
     #[test]

@@ -57,7 +57,7 @@ mod world;
 pub use dump::DumpPlan;
 
 pub use {
-    check::{Assert, Changes, Check, Cu, Measure, ReturnData},
+    check::{Assert, Check, Cu, Measure, ReturnData},
     outcome::Outcome,
     parallax_svm_derive::parallax_test,
     setup::{SetupError, TestBuilder, PROGRAM_PATH_ENV},
@@ -102,8 +102,8 @@ pub mod prelude {
             AssociatedTokenAccount, Dump, Fixture, Load, Mint, Program, TokenAccount, TokenProgram,
             Wallet,
         },
-        parallax_test, system_program, Account, AccountChange, AccountMeta, Assert, Changes, Check,
-        Cu, Instruction, Outcome, ProgramError, Pubkey, ReturnData, Snapshot, Test,
+        parallax_test, system_program, Account, AccountChange, AccountMeta, Assert, Check, Cu,
+        Instruction, Outcome, ProgramError, Pubkey, ReturnData, Snapshot, Test,
         DEFAULT_WALLET_LAMPORTS, SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID,
         SPL_TOKEN_PROGRAM_ID,
     };
@@ -117,9 +117,8 @@ mod tests {
             co_signers,
             fixture::{AssociatedTokenAccount, Fixture, Mint, TokenAccount, TokenProgram, Wallet},
             setup::resolve_program_path_from_named,
-            system_program, Account, AccountMeta, Changes, Check, Instruction, Outcome,
-            ProgramError, Pubkey, SetupError, Test, DEFAULT_WALLET_LAMPORTS,
-            SPL_TOKEN_2022_PROGRAM_ID,
+            system_program, Account, AccountMeta, Check, Instruction, Outcome, ProgramError,
+            Pubkey, SetupError, Test, DEFAULT_WALLET_LAMPORTS, SPL_TOKEN_2022_PROGRAM_ID,
         },
         spl_token::solana_program::program_option::COption,
         std::{fs, path::PathBuf},
@@ -540,7 +539,7 @@ mod tests {
             .succeeds()
             .check([
                 Account::lamports(recipient).eq(amount),
-                Changes::eq([payer, recipient]),
+                Account::lamports(payer).with(|lamports| assert!(lamports > 0)),
                 Account::created(recipient),
             ]);
     }

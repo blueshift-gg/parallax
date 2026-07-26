@@ -12,7 +12,6 @@ import { Address, TransactionInstruction } from "@solana/web3.js";
 import { getTokenDecoder } from "@solana-program/token";
 import {
   Account as KAccount,
-  Changes as KChanges,
   Cu as KCu,
   ReturnData as KReturnData,
   TokenAccount as KTokenAccount,

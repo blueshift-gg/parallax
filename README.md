@@ -143,7 +143,7 @@ test.send(withdraw)
         Account::lamports(recipient).eq(1_000_000),
         Account::owner(vault).eq(program_id),
         TokenAccount::amount(user_ata).eq(600),
-        Changes::eq([recipient, vault]),   // the exact changed set, in order
+        Account::created(vault),
     ]);
 ```
 
