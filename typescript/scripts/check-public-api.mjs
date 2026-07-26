@@ -94,6 +94,7 @@ const EXPECTED = {
       "accountChanges",
       "accounts",
       "check",
+      "checks",
       "computeUnits",
       "error",
       "events",

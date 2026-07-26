@@ -7,46 +7,58 @@ import {
 } from "./outcome.js";
 
 /**
- * The built-in fact namespaces, mirroring Rust: name the fact, bind its
- * subject, then compare — `check([Cu.spent().le(5_000),
- * Account.lamports(vault).eq(n)])`. Every value is a plain `Check` function,
- * so heterogeneous facts group in an array.
+ * Convert several checks into one check. A bundle is itself a `Check`, so
+ * bundles nest, and a protocol's standard assertions become a plain function
+ * returning one. Mirrors Rust `bundle`.
+ */
+export function bundle<Address, Account>(
+  checks: Iterable<Check<Address, Account>>,
+): Check<Address, Account> {
+  const collected = [...checks];
+  return tx => {
+    for (const check of collected) check(tx);
+  };
+}
+
+/** A value expectation (equality) or a predicate over the measured value. */
+export type ExpectedValue<T> = T | ((actual: T) => boolean);
+
+/** An expectation over raw bytes: exact bytes, or a predicate over them. */
+export type ExpectedBytes =
+  | Uint8Array
+  | readonly number[]
+  | ((actual: Uint8Array) => boolean);
+
+/**
+ * The fact namespaces, mirroring Rust: every fact takes its subject and one
+ * expectation — a plain value means equality, a closure is a predicate.
  */
 export interface Checks<Address, Account> {
-  /** Compute-unit facts: `Cu.spent().le(5_000)`. */
+  /** Compute-unit facts: `Cu.spent(cu => cu <= 5_000n)`, `Cu.spent(1_556n)`. */
   readonly Cu: {
-    /** The compute units the transaction consumed. */
-    spent(): Comparators<Address, Account>;
+    spent(expected: ExpectedValue<bigint | number>): Check<Address, Account>;
   };
-  /** Account-scoped facts: lamports, owner, raw data, and typed state. */
+  /** Account-scoped facts: lamports, owner, data, and the lifecycle. */
   readonly Account: {
-    /** The lamport balance of the account at `address`. */
-    lamports(address: Address): Comparators<Address, Account>;
-    /** The owner of the account: `Account.owner(vault).eq(programId)`. */
-    owner(address: Address): {
-      eq(program: Address): Check<Address, Account>;
-      /** Pipe the owner into a closure. */
-      with(check: (owner: Address) => void): Check<Address, Account>;
-    };
-    /** The raw data bytes of the account — the raw sibling of `state`. */
-    data(address: Address): {
-      eq(expected: Uint8Array | readonly number[]): Check<Address, Account>;
-      /** Pipe the raw data bytes into a closure. */
-      with(check: (data: Uint8Array) => void): Check<Address, Account>;
-    };
+    lamports(
+      address: Address,
+      expected: ExpectedValue<bigint | number>,
+    ): Check<Address, Account>;
+    owner(
+      address: Address,
+      expected: Address | ((actual: Address) => boolean),
+    ): Check<Address, Account>;
     /**
-     * The typed state of the account, decoded through a generated codec — the
+     * The account's data: raw bytes with `data(address, expected)`, or decoded
+     * through a generated codec with `data(codec, address, predicate)` — the
      * same validate-and-decode path as `Test.read`.
      */
-    state<Value>(
+    data(address: Address, expected: ExpectedBytes): Check<Address, Account>;
+    data<Value>(
       codec: AccountCodec<Value, Address>,
       address: Address,
-    ): {
-      /** Assert the account decodes to exactly `expected` (deep equality). */
-      eq(expected: Value): Check<Address, Account>;
-      /** Assert on the decoded state with a closure, for partial facts. */
-      with(check: (state: Value) => void): Check<Address, Account>;
-    };
+      predicate: (actual: Value) => boolean,
+    ): Check<Address, Account>;
     /** Assert the transaction created the account (absent before). */
     created(address: Address): Check<Address, Account>;
     /** Assert the transaction removed the account (absent after). */
@@ -56,42 +68,27 @@ export interface Checks<Address, Account> {
   };
   /** The mint fact; reads Token or Token-2022 mints. */
   readonly Mint: {
-    /** The supply of the mint at `address`. */
-    supply(address: Address): Comparators<Address, Account>;
+    supply(
+      address: Address,
+      expected: ExpectedValue<bigint | number>,
+    ): Check<Address, Account>;
   };
   /** The token-account fact; reads Token or Token-2022 accounts. */
   readonly TokenAccount: {
-    /** The token balance of the token account at `address`. */
-    amount(address: Address): Comparators<Address, Account>;
+    amount(
+      address: Address,
+      expected: ExpectedValue<bigint | number>,
+    ): Check<Address, Account>;
   };
   /** Transaction return-data facts. */
   readonly ReturnData: {
-    eq(expected: Uint8Array | readonly number[]): Check<Address, Account>;
-    /** Pipe the return data into a closure. */
-    with(check: (data: Uint8Array) => void): Check<Address, Account>;
+    is(expected: ExpectedBytes): Check<Address, Account>;
   };
 }
 
-/** A bound numeric fact awaiting its comparator. */
-export interface Comparators<Address, Account> {
-  eq(expected: bigint | number): Check<Address, Account>;
-  le(expected: bigint | number): Check<Address, Account>;
-  lt(expected: bigint | number): Check<Address, Account>;
-  ge(expected: bigint | number): Check<Address, Account>;
-  gt(expected: bigint | number): Check<Address, Account>;
-  /** Pipe the measured value into a closure, map-style. */
-  with(check: (value: bigint) => void): Check<Address, Account>;
+function describeBytes(bytes: ArrayLike<number>): string {
+  return `[${Array.from(bytes).join(", ")}]`;
 }
-
-type Op = "==" | "<=" | "<" | ">=" | ">";
-
-const HOLDS: Record<Op, (actual: bigint, expected: bigint) => boolean> = {
-  "==": (a, e) => a === e,
-  "<=": (a, e) => a <= e,
-  "<": (a, e) => a < e,
-  ">=": (a, e) => a >= e,
-  ">": (a, e) => a > e,
-};
 
 function bytesEqual(actual: Uint8Array, expected: ArrayLike<number>): boolean {
   return (
@@ -100,46 +97,10 @@ function bytesEqual(actual: Uint8Array, expected: ArrayLike<number>): boolean {
   );
 }
 
-function describeBytes(bytes: ArrayLike<number>): string {
-  return `[${Array.from(bytes).join(", ")}]`;
-}
-
-/** Deep equality over decoded state: primitives, bigints, bytes, arrays, objects. */
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (a instanceof Uint8Array && b instanceof Uint8Array) {
-    return bytesEqual(a, b);
-  }
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every((item, i) => deepEqual(item, b[i]));
-  }
-  if (
-    typeof a === "object" &&
-    typeof b === "object" &&
-    a !== null &&
-    b !== null
-  ) {
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
-    return (
-      keysA.length === keysB.length &&
-      keysA.every(key =>
-        deepEqual(
-          (a as Record<string, unknown>)[key],
-          (b as Record<string, unknown>)[key],
-        ),
-      )
-    );
-  }
-  return false;
-}
-
-function render(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) => {
-    if (typeof v === "bigint") return `${v}n`;
-    if (v instanceof Uint8Array) return describeBytes(v);
-    return v;
-  });
+function renderValue(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    typeof v === "bigint" ? `${v}n` : v,
+  );
 }
 
 /** Build the fact namespaces over one adapter's account/address model. */
@@ -149,19 +110,19 @@ export function createChecks<Address, Account>(
   type C = Check<Address, Account>;
   type O = Outcome<Address, Account>;
 
-  const requiredAccount = (outcome: O, address: Address): Account => {
-    const account = outcome.account(address);
+  const requiredAccount = (tx: O, address: Address): Account => {
+    const account = tx.account(address);
     if (account === null) {
       throw new Error(
-        `outcome does not contain account ${adapter.renderAddress(address)}`,
+        `transaction does not contain account ${adapter.renderAddress(address)}`,
       );
     }
     return account;
   };
 
-  const requiredChange = (outcome: O, address: Address) => {
+  const requiredChange = (tx: O, address: Address) => {
     const key = adapter.addressKey(address);
-    const change = outcome.accountChanges.find(
+    const change = tx.accountChanges.find(
       candidate => adapter.addressKey(candidate.address) === key,
     );
     if (change === undefined) {
@@ -172,140 +133,137 @@ export function createChecks<Address, Account>(
     return change;
   };
 
-  const comparators = (
-    label: string,
-    read: (outcome: O) => bigint,
-  ): Comparators<Address, Account> => {
-    const make =
-      (op: Op) =>
-      (expected: bigint | number): C =>
-      outcome => {
-        const actual = read(outcome);
-        if (!HOLDS[op](actual, BigInt(expected))) {
+  // A value expectation prints `expected N, got M`; a predicate cannot print
+  // its source, so it fails with the actual value alone (the stack trace
+  // names the test line that built it).
+  const numeric =
+    (label: string, read: (tx: O) => bigint) =>
+    (expected: ExpectedValue<bigint | number>): C =>
+    tx => {
+      const actual = read(tx);
+      if (typeof expected === "function") {
+        if (!expected(actual)) {
+          throw new Error(`${label}: predicate failed — actual: ${actual}`);
+        }
+      } else if (actual !== BigInt(expected)) {
+        throw new Error(`${label}: expected ${expected}, got ${actual}`);
+      }
+    };
+
+  const bytes =
+    (label: string, read: (tx: O) => Uint8Array) =>
+    (expected: ExpectedBytes): C =>
+    tx => {
+      const actual = read(tx);
+      if (typeof expected === "function") {
+        if (!expected(actual)) {
           throw new Error(
-            `${label}: expected ${op} ${expected}, got ${actual}`,
+            `${label}: predicate failed — actual: ${describeBytes(actual)}`,
+          );
+        }
+      } else if (!bytesEqual(actual, expected)) {
+        throw new Error(
+          `${label}: expected ${describeBytes(expected)}, got ${describeBytes(actual)}`,
+        );
+      }
+    };
+
+  function data(address: Address, expected: ExpectedBytes): C;
+  function data<Value>(
+    codec: AccountCodec<Value, Address>,
+    address: Address,
+    predicate: (actual: Value) => boolean,
+  ): C;
+  function data<Value>(
+    first: Address | AccountCodec<Value, Address>,
+    second: Address | ExpectedBytes,
+    third?: (actual: Value) => boolean,
+  ): C {
+    if (third !== undefined) {
+      const codec = first as AccountCodec<Value, Address>;
+      const address = second as Address;
+      return tx => {
+        const actual = decodeAccount(
+          codec,
+          address,
+          requiredAccount(tx, address),
+          adapter,
+        );
+        if (!third(actual)) {
+          throw new Error(
+            `data of ${adapter.renderAddress(address)}: predicate failed — actual: ${renderValue(actual)}`,
           );
         }
       };
-    return {
-      eq: make("=="),
-      le: make("<="),
-      lt: make("<"),
-      ge: make(">="),
-      gt: make(">"),
-      with: check => outcome => check(read(outcome)),
-    };
-  };
-
-  const accountValue = (
-    label: string,
-    read: (account: Account) => bigint,
-  ) => (address: Address) =>
-    comparators(`${label} of ${adapter.renderAddress(address)}`, outcome =>
-      read(requiredAccount(outcome, address)),
-    );
+    }
+    const address = first as Address;
+    return bytes(`data of ${adapter.renderAddress(address)}`, tx =>
+      adapter.accountData(requiredAccount(tx, address)),
+    )(second as ExpectedBytes);
+  }
 
   return {
     Cu: {
-      spent: () =>
-        comparators("compute units", outcome => outcome.computeUnits),
+      spent: expected => numeric("compute units", tx => tx.computeUnits)(expected),
     },
     Account: {
-      lamports: accountValue("lamports", adapter.lamports),
-      owner: address => ({
-        with:
-          (check): C =>
-          outcome =>
-            check(adapter.accountOwner(requiredAccount(outcome, address))),
-        eq: (program): C => outcome => {
-          const owner = adapter.accountOwner(requiredAccount(outcome, address));
-          if (adapter.addressKey(owner) !== adapter.addressKey(program)) {
+      lamports: (address, expected) =>
+        numeric(`lamports of ${adapter.renderAddress(address)}`, tx =>
+          adapter.lamports(requiredAccount(tx, address)),
+        )(expected),
+      owner: (address, expected) => tx => {
+        const actual = adapter.accountOwner(requiredAccount(tx, address));
+        const label = `owner of ${adapter.renderAddress(address)}`;
+        if (typeof expected === "function") {
+          if (!(expected as (actual: Address) => boolean)(actual)) {
             throw new Error(
-              `account ${adapter.renderAddress(address)} is owned by ${adapter.renderAddress(owner)}, expected ${adapter.renderAddress(program)}`,
+              `${label}: predicate failed — actual: ${adapter.renderAddress(actual)}`,
             );
           }
-        },
-      }),
-      data: address => ({
-        with:
-          (check): C =>
-          outcome =>
-            check(adapter.accountData(requiredAccount(outcome, address))),
-        eq: (expected): C => outcome => {
-          const data = adapter.accountData(requiredAccount(outcome, address));
-          if (!bytesEqual(data, expected)) {
-            throw new Error(
-              `unexpected account data for ${adapter.renderAddress(address)}: expected ${describeBytes(expected)}, got ${describeBytes(data)}`,
-            );
-          }
-        },
-      }),
-      created: (address): C => outcome => {
-        if (!requiredChange(outcome, address).wasCreated()) {
+        } else if (adapter.addressKey(actual) !== adapter.addressKey(expected)) {
+          throw new Error(
+            `${label}: expected ${adapter.renderAddress(expected)}, got ${adapter.renderAddress(actual)}`,
+          );
+        }
+      },
+      data,
+      created: address => tx => {
+        if (!requiredChange(tx, address).wasCreated()) {
           throw new Error(
             `account ${adapter.renderAddress(address)} was not created by this transaction`,
           );
         }
       },
-      removed: (address): C => outcome => {
-        if (!requiredChange(outcome, address).wasRemoved()) {
+      removed: address => tx => {
+        if (!requiredChange(tx, address).wasRemoved()) {
           throw new Error(
             `account ${adapter.renderAddress(address)} was not removed by this transaction`,
           );
         }
       },
-      closed: (address): C => outcome => {
-        const account = outcome.account(address);
+      closed: address => tx => {
+        const account = tx.account(address);
         if (account !== null && !adapter.isClosed(account)) {
           throw new Error(
             `account ${adapter.renderAddress(address)} is not closed`,
           );
         }
       },
-      state: (codec, address) => ({
-        eq: (expected): C => outcome => {
-          const actual = decodeAccount(
-            codec,
-            address,
-            requiredAccount(outcome, address),
-            adapter,
-          );
-          if (!deepEqual(actual, expected)) {
-            throw new Error(
-              `unexpected state for ${adapter.renderAddress(address)}: expected ${render(expected)}, got ${render(actual)}`,
-            );
-          }
-        },
-        with: (check): C => outcome => {
-          check(
-            decodeAccount(
-              codec,
-              address,
-              requiredAccount(outcome, address),
-              adapter,
-            ),
-          );
-        },
-      }),
     },
     Mint: {
-      supply: accountValue("mint supply", adapter.mintSupply),
+      supply: (address, expected) =>
+        numeric(`supply of ${adapter.renderAddress(address)}`, tx =>
+          adapter.mintSupply(requiredAccount(tx, address)),
+        )(expected),
     },
     TokenAccount: {
-      amount: accountValue("token balance", adapter.tokenAmount),
+      amount: (address, expected) =>
+        numeric(`token balance of ${adapter.renderAddress(address)}`, tx =>
+          adapter.tokenAmount(requiredAccount(tx, address)),
+        )(expected),
     },
     ReturnData: {
-      with:
-        (check): C =>
-        outcome =>
-          check(outcome.returnData),
-      eq: (expected): C => outcome => {
-        if (!bytesEqual(outcome.returnData, expected)) {
-          throw new Error(
-            `unexpected return data: expected ${describeBytes(expected)}, got ${describeBytes(outcome.returnData)}`,
-          );
-        }
-      },
+      is: expected => bytes("return data", tx => tx.returnData)(expected),
     },
   };
 }

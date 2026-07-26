@@ -78,6 +78,24 @@ export type Check<Address, Account> = (
   outcome: Outcome<Address, Account>,
 ) => void;
 
+/**
+ * A transaction proven successful by `succeeds()` — the witness checks run
+ * against. All reads plus `check`/`checks`; the verdict methods are gone.
+ */
+export type SucceededTransaction<Address, Account> = Omit<
+  Outcome<Address, Account>,
+  "succeeds" | "fails" | "failsWith"
+>;
+
+/**
+ * A transaction proven failed by `fails()`/`failsWith()`. Reads only — a
+ * failed transaction commits nothing, so checks are deliberately absent.
+ */
+export type FailedTransaction<Address, Account> = Omit<
+  Outcome<Address, Account>,
+  "succeeds" | "fails" | "failsWith" | "check" | "checks"
+>;
+
 function describeBytes(bytes: Uint8Array): string {
   return `[${Array.from(bytes).join(", ")}]`;
 }
@@ -187,7 +205,8 @@ export class Outcome<Address, Account> {
     return this.#error !== null;
   }
 
-  succeeds(): this {
+  /** Assert success, yielding the witness that checks run against. */
+  succeeds(): SucceededTransaction<Address, Account> {
     if (this.#error !== null) {
       throw new Error(
         `expected success, got ${JSON.stringify(this.#error)}${this.formattedLogs()}`,
@@ -196,7 +215,7 @@ export class Outcome<Address, Account> {
     return this;
   }
 
-  fails(expected: ProgramError): this {
+  fails(expected: ProgramError): FailedTransaction<Address, Account> {
     if (this.#error === null) {
       throw new Error(
         `expected error ${JSON.stringify(expected)}, but execution succeeded`,
@@ -210,7 +229,7 @@ export class Outcome<Address, Account> {
     return this;
   }
 
-  failsWith(code: number): this {
+  failsWith(code: number): FailedTransaction<Address, Account> {
     return this.fails({ type: "Custom", code });
   }
 
@@ -219,10 +238,15 @@ export class Outcome<Address, Account> {
    * Chainable. For a check verified after *every* committed send, register it
    * once with `Test.invariant` instead. Mirrors Rust `Outcome::check`.
    */
-  check(
-    check: Check<Address, Account> | readonly Check<Address, Account>[],
-  ): this {
-    for (const one of Array.isArray(check) ? check : [check]) one(this);
+  /** Run one check or one `bundle`. Chainable. */
+  check(check: Check<Address, Account>): this {
+    check(this);
+    return this;
+  }
+
+  /** Run several checks and/or bundles. Chainable. */
+  checks(checks: Iterable<Check<Address, Account>>): this {
+    for (const check of checks) check(this);
     return this;
   }
 

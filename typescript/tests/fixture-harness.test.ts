@@ -125,9 +125,9 @@ describe("fixture-first test harness", () => {
     const outcome = test
       .send(transfer)
       .succeeds()
-      .check(KTokenAccount.amount(alice).eq(4_000n))
-      .check(KTokenAccount.amount(bob).eq(1_000n))
-      .check(KCu.spent().le(20_000n));
+      .check(KTokenAccount.amount(alice, 4_000n))
+      .check(KTokenAccount.amount(bob, 1_000n))
+      .check(KCu.spent(cu => cu <= 20_000n));
     expect(outcome.accountChanges.map(change => change.address)).toEqual([
       alice,
       bob,
@@ -137,10 +137,10 @@ describe("fixture-first test harness", () => {
     test
       .send({ ...transfer, data: transferData(10_000n) })
       .failsWith(1)
-      .check(KTokenAccount.amount(alice).eq(4_000n))
-      .check(KTokenAccount.amount(bob).eq(1_000n));
+      .check(KTokenAccount.amount(alice, 4_000n))
+      .check(KTokenAccount.amount(bob, 1_000n));
 
-    test.simulate(transfer).succeeds().check(KTokenAccount.amount(bob).eq(2_000n));
+    test.simulate(transfer).succeeds().check(KTokenAccount.amount(bob, 2_000n));
     expect(test.tokens(bob)).toBe(1_000n);
 
     const protocol: KitFixture<readonly [typeof authority, typeof mint]> = {
@@ -174,9 +174,9 @@ describe("fixture-first test harness", () => {
     const outcome = test
       .send(transfer)
       .succeeds()
-      .check(WTokenAccount.amount(alice).eq(4_000n))
-      .check(WTokenAccount.amount(bob).eq(1_000n))
-      .check(WCu.spent().le(20_000n));
+      .check(WTokenAccount.amount(alice, 4_000n))
+      .check(WTokenAccount.amount(bob, 1_000n))
+      .check(WCu.spent(cu => cu <= 20_000n));
     expect(
       outcome.accountChanges.map(change => change.address.toBase58()),
     ).toEqual([alice.toBase58(), bob.toBase58()]);
@@ -191,10 +191,10 @@ describe("fixture-first test harness", () => {
         }),
       )
       .failsWith(1)
-      .check(WTokenAccount.amount(alice).eq(4_000n))
-      .check(WTokenAccount.amount(bob).eq(1_000n));
+      .check(WTokenAccount.amount(alice, 4_000n))
+      .check(WTokenAccount.amount(bob, 1_000n));
 
-    test.simulate(transfer).succeeds().check(WTokenAccount.amount(bob).eq(2_000n));
+    test.simulate(transfer).succeeds().check(WTokenAccount.amount(bob, 2_000n));
     expect(test.tokens(bob)).toBe(1_000n);
 
     const protocol: Web3Fixture<readonly [Address, Address]> = {
@@ -342,18 +342,14 @@ describe("typed account ergonomics", () => {
       decode: (bytes: Uint8Array) => getTokenDecoder().decode(bytes),
     } satisfies KitAccountCodec<{ amount: bigint }>;
 
-    const outcome = test.send(transfer).succeeds().check([
-      KAccount.owner(alice).eq(address(tokenProgram)),
-      KAccount.state(tokenCodec, alice).with(state =>
-        expect(BigInt(state.amount)).toBe(4_000n),
-      ),
-      KAccount.state(tokenCodec, bob).with(state =>
-        expect(BigInt(state.amount)).toBe(1_000n),
-      ),
+    const outcome = test.send(transfer).succeeds().checks([
+      KAccount.owner(alice, address(tokenProgram)),
+      KAccount.data(tokenCodec, alice, state => BigInt(state.amount) === 4_000n),
+      KAccount.data(tokenCodec, bob, state => BigInt(state.amount) === 1_000n),
     ]);
 
-    // Owner.eq mirrors Rust's orthogonal Owner check: it checks owner alone.
-    expect(() => outcome.check(KAccount.owner(alice).eq(kitAddr()))).toThrow(/owned by/);
+    // The owner fact mirrors Rust's orthogonal check: it judges owner alone.
+    expect(() => outcome.check(KAccount.owner(alice, kitAddr()))).toThrow(/owner of/);
 
     expect(BigInt(test.read(tokenCodec, alice).amount)).toBe(4_000n);
     expect(() =>
@@ -401,13 +397,9 @@ describe("typed account ergonomics", () => {
     test
       .send(transfer)
       .succeeds()
-      .check([
-        WAccount.state(tokenCodec, alice).with(state =>
-          expect(BigInt(state.amount)).toBe(4_000n),
-        ),
-        WAccount.state(tokenCodec, bob).with(state =>
-          expect(BigInt(state.amount)).toBe(1_000n),
-        ),
+      .checks([
+        WAccount.data(tokenCodec, alice, state => BigInt(state.amount) === 4_000n),
+        WAccount.data(tokenCodec, bob, state => BigInt(state.amount) === 1_000n),
       ]);
 
     expect(BigInt(test.read(tokenCodec, alice).amount)).toBe(4_000n);
@@ -515,7 +507,7 @@ describe("typed account ergonomics", () => {
       data: transferData(500n),
     };
 
-    test.send(transfer).succeeds().check(KTokenAccount.amount(bob).eq(500n));
+    test.send(transfer).succeeds().check(KTokenAccount.amount(bob, 500n));
   });
 
   it("builds co-signer metas and auto-registers missing signers (Web3.js)", async () => {
@@ -551,7 +543,7 @@ describe("typed account ergonomics", () => {
       data: transferData(500n),
     });
 
-    test.send(transfer).succeeds().check(WTokenAccount.amount(bob).eq(500n));
+    test.send(transfer).succeeds().check(WTokenAccount.amount(bob, 500n));
   });
 });
 
@@ -579,7 +571,7 @@ describe("writable-first account backfill", () => {
     expect(test.simulate(transfer()).isErr()).toBe(true);
 
     await test.add(kitWallet({ address: payer }));
-    test.send(transfer()).succeeds().check(KAccount.lamports(recipient).eq(amount));
+    test.send(transfer()).succeeds().check(KAccount.lamports(recipient, amount));
   });
 
   it("treats a missing writable signer as an empty init target, not a funded payer (Web3.js)", async () => {
@@ -600,7 +592,7 @@ describe("writable-first account backfill", () => {
     expect(test.simulate(transfer()).isErr()).toBe(true);
 
     await test.add(web3Wallet({ address: payer }));
-    test.send(transfer()).succeeds().check(WAccount.lamports(recipient).eq(amount));
+    test.send(transfer()).succeeds().check(WAccount.lamports(recipient, amount));
   });
 
   // A read-only signer (a co-signer, e.g. a multisig member) is an actor and
@@ -624,8 +616,8 @@ describe("writable-first account backfill", () => {
     test
       .send(transfer)
       .succeeds()
-      .check(KAccount.lamports(recipient).eq(amount))
-      .check(KAccount.lamports(cosigner).eq(DEFAULT_WALLET_LAMPORTS));
+      .check(KAccount.lamports(recipient, amount))
+      .check(KAccount.lamports(cosigner, DEFAULT_WALLET_LAMPORTS));
   });
 
   it("backfills a read-only co-signer as a funded account (Web3.js)", async () => {
@@ -647,8 +639,8 @@ describe("writable-first account backfill", () => {
     test
       .send(transfer)
       .succeeds()
-      .check(WAccount.lamports(recipient).eq(amount))
-      .check(WAccount.lamports(cosigner).eq(DEFAULT_WALLET_LAMPORTS));
+      .check(WAccount.lamports(recipient, amount))
+      .check(WAccount.lamports(cosigner, DEFAULT_WALLET_LAMPORTS));
   });
 });
 
@@ -693,7 +685,7 @@ describe("execution matrix completions", () => {
     test
       .sendAllWith([transfer(payer, recipient)], [fundedSystemAccount(payer)])
       .succeeds()
-      .check(KAccount.lamports(recipient).eq(amount));
+      .check(KAccount.lamports(recipient, amount));
   });
 
   it("simulateWith seeds explicit inputs without committing", async () => {
@@ -852,9 +844,9 @@ describe("checks and invariants", () => {
     test
       .send(transfer())
       .succeeds()
-      .check(KCu.spent().le(10_000))
+      .check(KCu.spent(cu => cu <= 10_000))
       .check(outcome => expect(outcome.isOk()).toBe(true))
-      .check([KCu.spent().le(10_000), KReturnData.eq([]), KAccount.data(recipient).eq([]), KAccount.created(recipient)]);
+      .checks([KCu.spent(cu => cu <= 10_000), KReturnData.is([]), KAccount.data(recipient, []), KAccount.created(recipient)]);
 
     expect(() => test.send(transfer())).toThrow("cap exceeded");
     test.simulate(transfer()).succeeds();
@@ -881,7 +873,7 @@ describe("checks and invariants", () => {
         data: systemTransferData(amount),
       });
 
-    test.send(transfer()).succeeds().check([WCu.spent().le(10_000), WReturnData.eq([])]);
+    test.send(transfer()).succeeds().checks([WCu.spent(cu => cu <= 10_000), WReturnData.is([])]);
     expect(() => test.send(transfer())).toThrow("cap exceeded");
     test.simulate(transfer()).succeeds();
   });

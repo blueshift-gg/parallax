@@ -32,12 +32,14 @@ import {
   type TokenAccountOptions as SharedTokenAccountOptions,
   type WalletOptions as SharedWalletOptions,
 } from "./internal/fixture.js";
-import { createChecks } from "./internal/check.js";
+import { bundle, createChecks } from "./internal/check.js";
 import {
   Outcome as SharedOutcome,
   type AccountChange as SharedAccountChange,
   type AccountCodec as SharedAccountCodec,
   type Check as SharedCheck,
+  type FailedTransaction as SharedFailed,
+  type SucceededTransaction as SharedSucceeded,
 } from "./internal/outcome.js";
 import {
   SPL_ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -183,6 +185,9 @@ const adapter: HarnessAdapter<Address, WorldAccount, Instruction, Outcome> = {
 /** The built-in fact namespaces for `check([..])` and `invariant(..)`. */
 export const { Cu, Account, Mint, TokenAccount, ReturnData } =
   createChecks(adapter);
+export { bundle };
+export type SucceededTransaction = SharedSucceeded<Address, WorldAccount>;
+export type FailedTransaction = SharedFailed<Address, WorldAccount>;
 
 /** An isolated fixture-first test world using Kit address and account types. */
 export class Test extends TestCore<Address, WorldAccount, Instruction, Outcome> {

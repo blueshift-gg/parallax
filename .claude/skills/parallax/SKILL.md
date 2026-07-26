@@ -24,7 +24,7 @@ fn deposits(test: &mut Test) {
 
     test.send(DepositInstruction { user, amount: 1_000_000_000 })
         .succeeds()
-        .check([Cu::spent().le(10_000), Account::lamports(vault).eq(1_000_000_000)]);
+        .checks([Cu::spent(|cu| cu <= 10_000), Account::lamports(vault, 1_000_000_000)]);
 }
 ```
 
@@ -41,7 +41,7 @@ using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/my_program.so");
 const user = await test.add(wallet());
 test.send(await client.createDepositInstruction({ user, amount: 1_000_000_000n }))
     .succeeds()
-    .check(Cu.spent().le(10_000n));
+    .check(Cu.spent(cu => cu <= 10_000n));
 ```
 
 The native kernel resolves from the installed platform package, or set
@@ -92,21 +92,24 @@ instruction chain, `…_with` variants take raw transaction-input accounts.
 ```rust
 test.send(withdraw)
     .succeeds()                          // .fails(ProgramError::…) / .fails_with(MyError::Code)
-    .check([
-        Cu::spent().le(20_000),          // eq/le/lt/ge/gt on all numeric facts
-        Account::lamports(addr).eq(n),
-        Account::owner(addr).eq(program),
-        Account::data(addr).eq(bytes),
-        TokenAccount::amount(ata).eq(n), Mint::supply(mint).eq(n),
-        ReturnData::eq(bytes),
+    .checks([
+        Cu::spent(|cu| cu <= 20_000),    // value ⇒ equality, closure ⇒ predicate
+        Account::lamports(addr, n),
+        Account::lamports(addr, |x| x > 0),
+        Account::owner(addr, program),
+        Account::data(addr, |v: &Vault| v.amount == 600),  // typed, T inferred
+        Account::data(addr, bytes),      // raw bytes
         Account::created(vault),         // and removed(a) / closed(a)
-        Account::lamports(addr).with(|l| assert!(l > 0)),  // or pipe any value
-    ])
-    .check(Account::state(vault).eq(Vault { authority, amount: 600 }));  // typed, T inferred
+        TokenAccount::amount(ata, n), Mint::supply(mint, n),
+        ReturnData::is(bytes),
+    ]);
 ```
 
-TS mirrors every namespace (`Cu.spent().le`, `Account.lamports(a).eq`,
-`Account.state(codec, addr).eq(value)`).
+TS mirrors every namespace (`Cu.spent(cu => cu <= n)`, `Account.lamports(a, n)`,
+`Account.data(codec, addr, v => ..)`). `bundle([..])` groups checks into one
+value; `CheckFn::new(|tx| ..)` (TS: any `(tx) => void`) is the whole-transaction
+escape. `succeeds()` returns the witness checks run on; `fails_with` yields a
+read-only failed witness.
 `Account::state(addr).with::<T>(|s| ..)` asserts partial facts.
 
 Reads (not asserts): `account(addr)`, `accounts()`, `logs()`, `return_value()`,
@@ -128,7 +131,7 @@ let s = test.read::<MyState>(addr);             // decode full account data
 
 Rust types derive wincode schemas; generated client account types frame their
 own discriminator. TS uses generated `{Name}Account` codec bundles:
-`test.read(VaultAccount, addr)` / `Account.state(VaultAccount, addr).with(cb)`.
+`test.read(VaultAccount, addr)` / `Account.data(VaultAccount, addr, pred)`.
 
 ## Semantics you must not fight
 

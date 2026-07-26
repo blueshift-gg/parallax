@@ -1,358 +1,234 @@
-//! Reusable assertion values over execution outcomes.
+//! Check values: the verification half of the harness.
 //!
-//! The verification dual of [`Fixture`]: fixtures make world setup a value you
-//! can name, share, and compose; [`Check`] does the same for assertions. The
-//! verdict (`succeeds`/`fails`/`fails_with`) is a method on the outcome —
-//! everything else is a check value, run one-off through [`Outcome::check`] or
-//! on every committed send once registered with [`Test::invariant`]:
+//! The verdict methods ([`succeeds`](crate::Outcome::succeeds) /
+//! [`fails`](crate::Outcome::fails) / [`fails_with`](crate::Outcome::fails_with))
+//! produce a transaction witness; everything asserted about that transaction is
+//! a [`CheckFn`] — built from the fact namespaces, a [`bundle`] of other
+//! checks, or [`CheckFn::new`] over the whole transaction. Every fact takes its
+//! subject and one *expectation*: a plain value means equality, a closure is a
+//! predicate over the measured value:
 //!
 //! ```rust,ignore
-//! test.send(deposit).succeeds().check([
-//!     Cu::spent().le(5_000),
-//!     Account::lamports(vault).eq(amount),
-//!     Account::lamports(signer).with(|l| assert!(l > 0)),
+//! test.send(deposit).succeeds().checks([
+//!     Cu::spent(|cu| cu <= 5_000),
+//!     Account::lamports(vault, amount),                 // value ⇒ equality
+//!     Account::lamports(signer, |x| x > 0),             // predicate ⇒ anything
+//!     Account::data(vault, |v: &Vault| v.amount > 0),   // decoded through T's schema
 //!     Account::created(vault),
 //! ]);
 //! ```
 //!
-//! Every built-in constructor returns the same concrete [`Assert`] type, so a
-//! plain array groups them. Closures are checks too, and so are arrays and
-//! tuples of checks; implement the trait on a struct to give a protocol
-//! invariant a name.
-//!
-//! [`Fixture`]: crate::fixture::Fixture
-//! [`Test::invariant`]: crate::Test::invariant
+//! Value expectations fail with `expected N, got M`; predicates cannot print
+//! their source, so they fail with the location of the line that built them.
 
 use {
     crate::{
-        outcome::{mint_supply, token_amount},
-        Outcome, Pubkey,
+        outcome::{mint_supply, token_amount, SucceededTransaction},
+        Pubkey,
     },
+    core::panic::Location,
     wincode::{config::DefaultConfig, SchemaRead},
 };
 
-/// An assertion over an execution [`Outcome`], panicking with an actionable
-/// message when it does not hold.
+/// One assertion against a succeeded transaction.
 ///
-/// Built-in checks follow one shape — name the fact, bind its subject, then
-/// compare: [`Cu::spent`], [`Account::lamports`](crate::Account::lamports) and
-/// its siblings (`owner`/`data`/`state`/`created`/`removed`/`closed`),
-/// [`TokenAccount::amount`](crate::fixture::TokenAccount::amount)/[`Mint::supply`](crate::fixture::Mint::supply),
-/// plus the transaction-scoped [`ReturnData`]. Every bound fact compares
-/// (`eq`, and `le`/`lt`/`ge`/`gt` where numeric) or pipes its measured value
-/// into a closure (`with`). Closures over the whole outcome,
-/// arrays, and tuples of checks all qualify, and applications implement the
-/// trait to name their own invariants:
+/// Leaf facts, [`bundle`]s, and ad-hoc closures all reduce to this one type,
+/// so they group freely in the same [`checks`](SucceededTransaction::checks)
+/// array and nest arbitrarily. A panic in any leaf unwinds through the
+/// containing bundles.
+pub struct CheckFn(Box<dyn Fn(&SucceededTransaction)>);
+
+impl CheckFn {
+    /// Wrap a closure over the whole transaction — the escape hatch for
+    /// anything the fact namespaces cannot spell (relations across accounts,
+    /// log scans, ...). Assert or panic inside; returning means the check
+    /// passed.
+    pub fn new(check: impl Fn(&SucceededTransaction) + 'static) -> Self {
+        Self(Box::new(check))
+    }
+
+    /// Run the check against `tx`, panicking when it fails.
+    pub fn run(&self, tx: &SucceededTransaction) {
+        (self.0)(tx)
+    }
+}
+
+/// Convert several checks into one check. A bundle is itself a [`CheckFn`],
+/// so bundles nest, and a protocol's standard assertions become a plain
+/// function returning one:
 ///
 /// ```rust,ignore
-/// struct Solvent { pool: Pubkey }
-///
-/// impl Check for Solvent {
-///     fn check(&self, outcome: &Outcome) {
-///         Account::state(self.pool)
-///             .with::<Pool>(|p| assert!(p.reserves >= p.obligations))
-///             .check(outcome);
-///     }
+/// fn vault_invariants(vault: Pubkey, program: Pubkey) -> CheckFn {
+///     bundle([
+///         Account::owner(vault, program),
+///         Account::data(vault, |v: &Vault| v.amount > 0),
+///     ])
 /// }
-///
-/// test.invariant(Solvent { pool }); // verified after every send
 /// ```
-pub trait Check {
-    /// Assert against the outcome, panicking when the check fails.
-    fn check(&self, outcome: &Outcome);
-}
-
-impl<F: Fn(&Outcome)> Check for F {
-    fn check(&self, outcome: &Outcome) {
-        self(outcome);
-    }
-}
-
-impl<C: Check, const N: usize> Check for [C; N] {
-    fn check(&self, outcome: &Outcome) {
-        for check in self {
-            check.check(outcome);
+pub fn bundle(checks: impl IntoIterator<Item = CheckFn>) -> CheckFn {
+    let checks: Vec<_> = checks.into_iter().collect();
+    CheckFn::new(move |tx| {
+        for check in &checks {
+            check.run(tx);
         }
+    })
+}
+
+/// An expectation over a measured value of type `T`: a plain `T` means
+/// equality (and prints itself on failure), a `Fn(T) -> bool` closure is an
+/// arbitrary predicate (and fails with the location that built it).
+pub trait Expected<T> {
+    /// Whether the expectation holds for `actual`.
+    fn holds(&self, actual: &T) -> bool;
+    /// The expected value, when it can be printed (`None` for predicates).
+    fn describe(&self) -> Option<String>;
+}
+
+impl Expected<u64> for u64 {
+    fn holds(&self, actual: &u64) -> bool {
+        actual == self
+    }
+
+    fn describe(&self) -> Option<String> {
+        Some(self.to_string())
     }
 }
 
-macro_rules! impl_check_for_tuple {
-    ($($name:ident),+) => {
-        impl<$($name: Check),+> Check for ($($name,)+) {
-            fn check(&self, outcome: &Outcome) {
-                #[allow(non_snake_case)]
-                let ($($name,)+) = self;
-                $($name.check(outcome);)+
-            }
+impl<F: Fn(u64) -> bool> Expected<u64> for F {
+    fn holds(&self, actual: &u64) -> bool {
+        self(*actual)
+    }
+
+    fn describe(&self) -> Option<String> {
+        None
+    }
+}
+
+impl Expected<Pubkey> for Pubkey {
+    fn holds(&self, actual: &Pubkey) -> bool {
+        actual == self
+    }
+
+    fn describe(&self) -> Option<String> {
+        Some(self.to_string())
+    }
+}
+
+impl<F: Fn(Pubkey) -> bool> Expected<Pubkey> for F {
+    fn holds(&self, actual: &Pubkey) -> bool {
+        self(*actual)
+    }
+
+    fn describe(&self) -> Option<String> {
+        None
+    }
+}
+
+/// An expectation over raw bytes: exact bytes, or a predicate over the slice.
+pub trait ExpectedBytes {
+    /// Whether the expectation holds for `actual`.
+    fn holds(&self, actual: &[u8]) -> bool;
+    /// The expected bytes, when they can be printed (`None` for predicates).
+    fn describe(&self) -> Option<String>;
+}
+
+fn render_bytes(bytes: &[u8]) -> String {
+    format!("{bytes:?}")
+}
+
+impl<const N: usize> ExpectedBytes for [u8; N] {
+    fn holds(&self, actual: &[u8]) -> bool {
+        actual == self
+    }
+
+    fn describe(&self) -> Option<String> {
+        Some(render_bytes(self))
+    }
+}
+
+impl ExpectedBytes for Vec<u8> {
+    fn holds(&self, actual: &[u8]) -> bool {
+        actual == self.as_slice()
+    }
+
+    fn describe(&self) -> Option<String> {
+        Some(render_bytes(self))
+    }
+}
+
+impl ExpectedBytes for &'static [u8] {
+    fn holds(&self, actual: &[u8]) -> bool {
+        actual == *self
+    }
+
+    fn describe(&self) -> Option<String> {
+        Some(render_bytes(self))
+    }
+}
+
+impl<F: Fn(&[u8]) -> bool> ExpectedBytes for F {
+    fn holds(&self, actual: &[u8]) -> bool {
+        self(actual)
+    }
+
+    fn describe(&self) -> Option<String> {
+        None
+    }
+}
+
+/// Panic for a failed expectation: `expected N, got M` when the expectation
+/// prints itself, else the predicate's construction site and the actual value.
+fn fail(
+    label: &str,
+    expected: Option<String>,
+    actual: &dyn core::fmt::Display,
+    location: &Location,
+) -> ! {
+    match expected {
+        Some(expected) => panic!("{label}: expected {expected}, got {actual}"),
+        None => panic!("{label}: predicate at {location} failed — actual: {actual}"),
+    }
+}
+
+fn value_fact<T: core::fmt::Display + 'static>(
+    label: String,
+    location: &'static Location<'static>,
+    read: impl Fn(&SucceededTransaction) -> T + 'static,
+    expected: impl Expected<T> + 'static,
+) -> CheckFn {
+    CheckFn::new(move |tx| {
+        let actual = read(tx);
+        if !expected.holds(&actual) {
+            fail(&label, expected.describe(), &actual, location);
         }
-    };
+    })
 }
 
-impl_check_for_tuple!(A, B);
-impl_check_for_tuple!(A, B, C);
-impl_check_for_tuple!(A, B, C, D);
-
-/// A comparison a numeric check applies to its observed value.
-#[derive(Debug, Clone, Copy)]
-enum Cmp {
-    Eq,
-    Le,
-    Lt,
-    Ge,
-    Gt,
+fn required(tx: &SucceededTransaction, address: Pubkey) -> &crate::Account {
+    tx.account(address)
+        .unwrap_or_else(|| panic!("transaction does not contain account {address}"))
 }
 
-impl Cmp {
-    fn holds(self, actual: u64, expected: u64) -> bool {
-        match self {
-            Self::Eq => actual == expected,
-            Self::Le => actual <= expected,
-            Self::Lt => actual < expected,
-            Self::Ge => actual >= expected,
-            Self::Gt => actual > expected,
-        }
-    }
-
-    fn symbol(self) -> &'static str {
-        match self {
-            Self::Eq => "==",
-            Self::Le => "<=",
-            Self::Lt => "<",
-            Self::Ge => ">=",
-            Self::Gt => ">",
-        }
-    }
-}
-
-/// What a numeric account check reads from the resulting account.
-#[derive(Debug, Clone, Copy)]
-enum AccountValue {
-    Lamports,
-    Tokens,
-    Supply,
-}
-
-impl AccountValue {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Lamports => "lamports",
-            Self::Tokens => "token balance",
-            Self::Supply => "mint supply",
-        }
-    }
-
-    fn read(self, account: &crate::Account) -> u64 {
-        match self {
-            Self::Lamports => account.lamports,
-            Self::Tokens => token_amount(account),
-            Self::Supply => mint_supply(account),
-        }
-    }
-}
-
-/// A built-in check value. Every fact-namespace constructor returns this one
-/// concrete type, so heterogeneous facts group in a plain array:
-/// `check([Cu::spent().le(5_000), Account::lamports(vault).eq(n)])`.
-pub struct Assert(Inner);
-
-impl Assert {
-    /// Wrap a closure as an `Assert`, so application-defined facts group in
-    /// the same arrays as the built-ins. This is how a crate builds its own
-    /// fact namespace on top of parallax.
-    pub fn from_fn(check: impl Fn(&Outcome) + 'static) -> Self {
-        Self(Inner::Dyn(Box::new(check)))
-    }
-}
-
-enum Inner {
-    Cu(Cmp, u64),
-    Account(AccountValue, Pubkey, Cmp, u64),
-    Owner(Pubkey, Pubkey),
-    Data(Pubkey, Vec<u8>),
-    ReturnData(Vec<u8>),
-    Created(Pubkey),
-    Removed(Pubkey),
-    Closed(Pubkey),
-    Dyn(Box<dyn Fn(&Outcome)>),
-}
-
-impl Check for Assert {
-    fn check(&self, outcome: &Outcome) {
-        match &self.0 {
-            Inner::Cu(cmp, expected) => {
-                let actual = outcome.compute_units();
-                assert!(
-                    cmp.holds(actual, *expected),
-                    "compute units: expected {} {expected}, consumed {actual}",
-                    cmp.symbol()
-                );
-            }
-            Inner::Account(value, address, cmp, expected) => {
-                let actual = value.read(required(outcome, *address));
-                assert!(
-                    cmp.holds(actual, *expected),
-                    "{} of {address}: expected {} {expected}, got {actual}",
-                    value.label(),
-                    cmp.symbol()
-                );
-            }
-            Inner::Owner(address, program) => {
-                let owner = required(outcome, *address).owner;
-                assert_eq!(
-                    owner, *program,
-                    "account {address} is owned by {owner}, expected {program}"
-                );
-            }
-            Inner::Data(address, expected) => {
-                assert_eq!(
-                    required(outcome, *address).data,
-                    *expected,
-                    "unexpected account data for {address}"
-                );
-            }
-            Inner::ReturnData(expected) => {
-                assert_eq!(outcome.return_data(), expected, "unexpected return data");
-            }
-            Inner::Created(address) => {
-                assert!(
-                    change(outcome, *address).was_created(),
-                    "account {address} was not created by this transaction"
-                );
-            }
-            Inner::Removed(address) => {
-                assert!(
-                    change(outcome, *address).was_removed(),
-                    "account {address} was not removed by this transaction"
-                );
-            }
-            Inner::Closed(address) => {
-                // Solana's closed-account state: a runtime may remove the
-                // account entirely or retain its empty system-owned form.
-                if let Some(account) = outcome.account(*address) {
-                    assert_eq!(
-                        account.lamports, 0,
-                        "closed account {address} still holds lamports"
-                    );
-                    assert!(
-                        account.data.is_empty(),
-                        "closed account {address} still holds data"
-                    );
-                    assert_eq!(
-                        account.owner,
-                        crate::system_program::ID,
-                        "closed account {address} is not system-owned"
-                    );
-                }
-            }
-            Inner::Dyn(check) => check(outcome),
-        }
-    }
-}
-
-fn required(outcome: &Outcome, address: Pubkey) -> &crate::Account {
-    outcome
-        .account(address)
-        .unwrap_or_else(|| panic!("outcome does not contain account {address}"))
-}
-
-fn change(outcome: &Outcome, address: Pubkey) -> &crate::AccountChange {
-    outcome
-        .account_changes()
+fn change(tx: &SucceededTransaction, address: Pubkey) -> &crate::AccountChange {
+    tx.account_changes()
         .iter()
         .find(|change| change.address() == address)
         .unwrap_or_else(|| panic!("this transaction did not change account {address}"))
 }
 
-/// A bound numeric fact awaiting its comparator: `Account::lamports(vault)`
-/// yields a `Measure`, and `.eq(n)`/`.le(n)`/`.lt(n)`/`.ge(n)`/`.gt(n)`
-/// finish it into an [`Assert`].
-pub struct Measure(MeasureSource);
-
-#[derive(Clone, Copy)]
-enum MeasureSource {
-    Cu,
-    Account(AccountValue, Pubkey),
-}
-
-impl MeasureSource {
-    fn read(self, outcome: &Outcome) -> u64 {
-        match self {
-            Self::Cu => outcome.compute_units(),
-            Self::Account(value, address) => value.read(required(outcome, address)),
-        }
-    }
-}
-
-impl Measure {
-    fn finish(self, cmp: Cmp, expected: u64) -> Assert {
-        Assert(match self.0 {
-            MeasureSource::Cu => Inner::Cu(cmp, expected),
-            MeasureSource::Account(value, address) => Inner::Account(value, address, cmp, expected),
-        })
-    }
-
-    /// Assert the measured value equals `expected`.
-    pub fn eq(self, expected: u64) -> Assert {
-        self.finish(Cmp::Eq, expected)
-    }
-
-    /// Assert the measured value is at most `expected`.
-    pub fn le(self, expected: u64) -> Assert {
-        self.finish(Cmp::Le, expected)
-    }
-
-    /// Assert the measured value is below `expected`.
-    pub fn lt(self, expected: u64) -> Assert {
-        self.finish(Cmp::Lt, expected)
-    }
-
-    /// Assert the measured value is at least `expected`.
-    pub fn ge(self, expected: u64) -> Assert {
-        self.finish(Cmp::Ge, expected)
-    }
-
-    /// Assert the measured value is above `expected`.
-    pub fn gt(self, expected: u64) -> Assert {
-        self.finish(Cmp::Gt, expected)
-    }
-
-    /// Pipe the measured value into a closure, for facts the comparators
-    /// cannot spell: `Account::lamports(user).with(|l| assert!(l > rent))`.
-    pub fn with(self, check: impl Fn(u64) + 'static) -> Assert {
-        let source = self.0;
-        Assert(Inner::Dyn(Box::new(move |outcome| {
-            check(source.read(outcome))
-        })))
-    }
-}
-
-/// Compute-unit facts: `Cu::spent().le(5_000)`.
+/// Compute-unit facts: `Cu::spent(|cu| cu <= 5_000)`, `Cu::spent(1_556)`.
 pub struct Cu;
 
 impl Cu {
     /// The compute units the transaction consumed.
-    pub fn spent() -> Measure {
-        Measure(MeasureSource::Cu)
-    }
-}
-
-/// The token-account fact, hung off the [`TokenAccount`](crate::fixture::TokenAccount)
-/// fixture type itself: one noun installs token accounts and measures them.
-/// Reads Token or Token-2022 accounts.
-impl crate::fixture::TokenAccount {
-    /// The token balance of the token account at `address`:
-    /// `TokenAccount::amount(ata).ge(500)`.
-    pub fn amount(address: Pubkey) -> Measure {
-        Measure(MeasureSource::Account(AccountValue::Tokens, address))
-    }
-}
-
-/// The mint fact, hung off the [`Mint`](crate::fixture::Mint) fixture type
-/// itself. Reads Token or Token-2022 mints.
-impl crate::fixture::Mint {
-    /// The supply of the mint at `address`: `Mint::supply(mint).eq(1_000)`.
-    pub fn supply(address: Pubkey) -> Measure {
-        Measure(MeasureSource::Account(AccountValue::Supply, address))
+    #[track_caller]
+    pub fn spent(expected: impl Expected<u64> + 'static) -> CheckFn {
+        value_fact(
+            "compute units".into(),
+            Location::caller(),
+            |tx| tx.compute_units(),
+            expected,
+        )
     }
 }
 
@@ -360,139 +236,183 @@ impl crate::fixture::Mint {
 /// itself: one noun installs raw accounts and measures them.
 impl crate::Account {
     /// The lamport balance of the account at `address`.
-    pub fn lamports(address: Pubkey) -> Measure {
-        Measure(MeasureSource::Account(AccountValue::Lamports, address))
+    #[track_caller]
+    pub fn lamports(address: Pubkey, expected: impl Expected<u64> + 'static) -> CheckFn {
+        value_fact(
+            format!("lamports of {address}"),
+            Location::caller(),
+            move |tx| required(tx, address).lamports,
+            expected,
+        )
     }
 
-    /// The owner of the account at `address`: `Account::owner(vault).eq(program_id)`.
-    pub fn owner(address: Pubkey) -> OwnerMeasure {
-        OwnerMeasure(address)
+    /// The owner of the account at `address`.
+    #[track_caller]
+    pub fn owner(address: Pubkey, expected: impl Expected<Pubkey> + 'static) -> CheckFn {
+        value_fact(
+            format!("owner of {address}"),
+            Location::caller(),
+            move |tx| required(tx, address).owner,
+            expected,
+        )
     }
 
-    /// The raw data bytes of the account at `address` — the raw sibling of
-    /// [`Self::state`].
-    pub fn data(address: Pubkey) -> DataMeasure {
-        DataMeasure(address)
-    }
-
-    /// The typed state of the account at `address`, decoded through the
-    /// type's wincode schema — the same decode path as
-    /// [`Test::read`](crate::Test::read). Ownership is intentionally not
-    /// checked; pair with [`Self::owner`] when it matters.
-    pub fn state(address: Pubkey) -> StateMeasure {
-        StateMeasure(address)
+    /// The data of the account at `address` — raw bytes when expected raw,
+    /// decoded through `T`'s wincode schema (the same decode path as
+    /// [`Test::read`](crate::Test::read)) when the predicate takes `&T`:
+    ///
+    /// ```rust,ignore
+    /// Account::data(config, [1, 0, 0, 0]),                     // raw
+    /// Account::data(vault, |v: &Vault| v.amount > 0),          // typed
+    /// Account::data(vault, |v: &Vault| *v == Vault { .. }),    // typed equality
+    /// ```
+    ///
+    /// Ownership is intentionally not checked; pair with [`Self::owner`] when
+    /// it matters.
+    #[track_caller]
+    pub fn data<M>(address: Pubkey, expected: impl DataExpected<M> + 'static) -> CheckFn {
+        let location = Location::caller();
+        CheckFn::new(move |tx| {
+            expected.verify(address, location, &required(tx, address).data);
+        })
     }
 
     /// Assert the transaction created the account at `address` (absent
     /// before, present after).
-    pub fn created(address: Pubkey) -> Assert {
-        Assert(Inner::Created(address))
+    pub fn created(address: Pubkey) -> CheckFn {
+        CheckFn::new(move |tx| {
+            assert!(
+                change(tx, address).was_created(),
+                "account {address} was not created by this transaction"
+            );
+        })
     }
 
     /// Assert the transaction removed the account at `address` (present
     /// before, absent after).
-    pub fn removed(address: Pubkey) -> Assert {
-        Assert(Inner::Removed(address))
+    pub fn removed(address: Pubkey) -> CheckFn {
+        CheckFn::new(move |tx| {
+            assert!(
+                change(tx, address).was_removed(),
+                "account {address} was not removed by this transaction"
+            );
+        })
     }
 
     /// Assert Solana's closed-account state at `address`: the runtime may
     /// remove the account entirely or retain its empty system-owned form.
-    pub fn closed(address: Pubkey) -> Assert {
-        Assert(Inner::Closed(address))
+    pub fn closed(address: Pubkey) -> CheckFn {
+        CheckFn::new(move |tx| {
+            if let Some(account) = tx.account(address) {
+                assert_eq!(
+                    account.lamports, 0,
+                    "closed account {address} still holds lamports"
+                );
+                assert!(
+                    account.data.is_empty(),
+                    "closed account {address} still holds data"
+                );
+                assert_eq!(
+                    account.owner,
+                    crate::system_program::ID,
+                    "closed account {address} is not system-owned"
+                );
+            }
+        })
     }
 }
 
-/// A bound account-owner fact awaiting its expected program.
-pub struct OwnerMeasure(Pubkey);
+/// An expectation over an account's data. Raw byte expectations compare the
+/// bytes; a `Fn(&T) -> bool` predicate decodes through `T`'s wincode schema
+/// first. The `M` marker only steers inference — call sites never name it.
+pub trait DataExpected<M> {
+    /// Verify the expectation against the account's raw data.
+    fn verify(&self, address: Pubkey, location: &'static Location<'static>, data: &[u8]);
+}
 
-impl OwnerMeasure {
-    /// Assert the account is owned by `program`.
-    pub fn eq(self, program: Pubkey) -> Assert {
-        Assert(Inner::Owner(self.0, program))
-    }
+/// Marker for raw-byte data expectations.
+pub struct Raw;
 
-    /// Pipe the owner into a closure.
-    pub fn with(self, check: impl Fn(Pubkey) + 'static) -> Assert {
-        let address = self.0;
-        Assert(Inner::Dyn(Box::new(move |outcome| {
-            check(required(outcome, address).owner)
-        })))
+/// Marker for typed data predicates over `T`.
+pub struct Typed<T>(core::marker::PhantomData<T>);
+
+impl<E: ExpectedBytes> DataExpected<Raw> for E {
+    fn verify(&self, address: Pubkey, location: &'static Location<'static>, data: &[u8]) {
+        if !self.holds(data) {
+            fail(
+                &format!("data of {address}"),
+                self.describe(),
+                &render_bytes(data),
+                location,
+            );
+        }
     }
 }
 
-/// A bound raw-data fact awaiting its expected bytes.
-pub struct DataMeasure(Pubkey);
-
-impl DataMeasure {
-    /// Assert the account's exact raw data bytes.
-    pub fn eq(self, expected: impl Into<Vec<u8>>) -> Assert {
-        Assert(Inner::Data(self.0, expected.into()))
-    }
-
-    /// Pipe the raw data bytes into a closure.
-    pub fn with(self, check: impl Fn(&[u8]) + 'static) -> Assert {
-        let address = self.0;
-        Assert(Inner::Dyn(Box::new(move |outcome| {
-            check(&required(outcome, address).data)
-        })))
+impl<T, F> DataExpected<Typed<T>> for F
+where
+    T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T> + core::fmt::Debug,
+    F: Fn(&T) -> bool,
+{
+    fn verify(&self, address: Pubkey, location: &'static Location<'static>, data: &[u8]) {
+        let actual = crate::world::decode::<T>("data", address, data, 0);
+        if !self(&actual) {
+            panic!("data of {address}: predicate at {location} failed — actual: {actual:#?}");
+        }
     }
 }
 
-/// A bound typed-state fact awaiting its expected value or closure.
-pub struct StateMeasure(Pubkey);
-
-impl StateMeasure {
-    /// Assert the account decodes to exactly `expected`:
-    /// `Account::state(vault).eq(Vault { authority, amount: 600 })`. `T` is
-    /// inferred from the value; failures print the full decoded/expected pair.
-    pub fn eq<T>(self, expected: T) -> Assert
-    where
-        T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T>
-            + PartialEq
-            + core::fmt::Debug
-            + 'static,
-    {
-        let address = self.0;
-        Assert(Inner::Dyn(Box::new(move |outcome| {
-            let actual = decode::<T>(outcome, address);
-            assert_eq!(actual, expected, "unexpected state for {address}");
-        })))
-    }
-
-    /// Assert on the decoded state with a closure, for partial or computed
-    /// facts: `Account::state(vault).with::<Vault>(|v| assert!(v.amount > 0))`.
-    pub fn with<T>(self, check: impl Fn(&T) + 'static) -> Assert
-    where
-        T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T> + 'static,
-    {
-        let address = self.0;
-        Assert(Inner::Dyn(Box::new(move |outcome| {
-            check(&decode::<T>(outcome, address));
-        })))
+/// The mint fact, on the [`Mint`](crate::fixture::Mint) fixture type itself.
+/// Reads Token or Token-2022 mints.
+impl crate::fixture::Mint {
+    /// The supply of the mint at `address`: `Mint::supply(mint, 1_000)`.
+    #[track_caller]
+    pub fn supply(address: Pubkey, expected: impl Expected<u64> + 'static) -> CheckFn {
+        value_fact(
+            format!("supply of {address}"),
+            Location::caller(),
+            move |tx| mint_supply(required(tx, address)),
+            expected,
+        )
     }
 }
 
-/// Transaction return-data facts: `ReturnData::eq([7])`.
+/// The token-account fact, on the
+/// [`TokenAccount`](crate::fixture::TokenAccount) fixture type itself. Reads
+/// Token or Token-2022 accounts.
+impl crate::fixture::TokenAccount {
+    /// The token balance of the token account at `address`:
+    /// `TokenAccount::amount(ata, |x| x >= 500)`.
+    #[track_caller]
+    pub fn amount(address: Pubkey, expected: impl Expected<u64> + 'static) -> CheckFn {
+        value_fact(
+            format!("token balance of {address}"),
+            Location::caller(),
+            move |tx| token_amount(required(tx, address)),
+            expected,
+        )
+    }
+}
+
+/// Transaction return-data facts: `ReturnData::is([7])`,
+/// `ReturnData::is(|data: &[u8]| data.len() == 8)`.
 pub struct ReturnData;
 
 impl ReturnData {
-    /// Assert the transaction's exact return data.
-    pub fn eq(expected: impl Into<Vec<u8>>) -> Assert {
-        Assert(Inner::ReturnData(expected.into()))
+    /// The transaction's return data.
+    #[track_caller]
+    pub fn is(expected: impl ExpectedBytes + 'static) -> CheckFn {
+        let location = Location::caller();
+        CheckFn::new(move |tx| {
+            let actual = tx.return_data();
+            if !expected.holds(actual) {
+                fail(
+                    "return data",
+                    expected.describe(),
+                    &render_bytes(actual),
+                    location,
+                );
+            }
+        })
     }
-
-    /// Pipe the return data into a closure.
-    pub fn with(check: impl Fn(&[u8]) + 'static) -> Assert {
-        Assert(Inner::Dyn(Box::new(move |outcome| {
-            check(outcome.return_data())
-        })))
-    }
-}
-
-fn decode<T>(outcome: &Outcome, address: Pubkey) -> T
-where
-    T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T>,
-{
-    let account = required(outcome, address);
-    crate::world::decode::<T>("state", address, &account.data, 0)
 }

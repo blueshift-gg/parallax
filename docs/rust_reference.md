@@ -177,74 +177,56 @@ assert on it — and it holds only stable, backend-neutral data. Assertions pani
 with actionable messages (and are chainable, returning `&Self`); reads return
 plain values or `Option`.
 
-The verdict is a method; every other assertion is a **check value** passed to
-`check`. One shape — name the fact, bind its subject, then compare — and a
-plain array groups heterogeneous facts:
+`succeeds()` yields a **transaction witness** — checks only exist on a proven
+success, so an account assert on a failed transaction is a compile error.
+Every fact takes its subject and one *expectation*: a plain value means
+equality, a closure is a predicate over the measured value:
 
 ```rust,ignore
-test.send(withdraw)
-    .succeeds()                                   // or: .fails(ProgramError::InsufficientFunds)
-    .check([                                      //     .fails_with(VaultError::Unauthorized)
-        Cu::spent().le(20_000),
-        Account::lamports(recipient).eq(1_000_000),
-        Account::owner(vault).eq(program_id),
-        TokenAccount::amount(user_ata).eq(600),
-        Mint::supply(mint).eq(1_000),
-        Account::lamports(user).with(|l| assert!(l > 0)),   // or pipe the value
-        Account::created(vault),
-    ])
-    .check(Account::state(vault).eq(VaultState { authority, amount: 600 }));
+test.send(withdraw).succeeds().checks([
+    Cu::spent(|cu| cu <= 20_000),
+    Account::lamports(recipient, 1_000_000),          // value ⇒ equality
+    Account::lamports(user, |x| x > 0),               // predicate ⇒ anything
+    Account::owner(vault, program_id),
+    Account::data(vault, |v: &Vault| v.amount > 600), // decoded through T's schema
+    Account::data(config, [1, 0, 0, 0]),              // raw bytes
+    Account::created(vault),                          // and removed / closed
+    Mint::supply(mint, 1_000),
+    TokenAccount::amount(user_ata, |x| x >= 500),
+    ReturnData::is([7]),
+]);
 ```
 
-The fact namespaces:
+Everything is one type, [`CheckFn`] — leaf facts, `bundle([..])` groups, and
+`CheckFn::new(|tx| ..)` closures over the whole transaction — so all of it
+nests and mixes freely, and a protocol's standard assertions become a plain
+function returning a bundle. Value expectations fail with `expected N, got M`;
+predicates cannot print their source, so they fail with the exact location of
+the line that built them plus the actual value. `fails(..)`/`fails_with(..)`
+yield a failed-transaction witness with the reads (logs, error, compute
+units) and deliberately no checks.
 
-| Fact | Comparators |
-| --- | --- |
-| `Cu::spent()` | `eq, le, lt, ge, gt (n)` |
-| `Account::lamports(addr)` | `eq, le, lt, ge, gt (n)` |
-| `Account::owner(addr)` | `eq(program)` |
-| `Account::data(addr)` | `eq(bytes)` — the raw sibling of `state` |
-| `Account::state(addr)` | `eq(value)` — typed, `T` inferred; `with::<T>(\|s\| ..)` for partial facts |
-| `TokenAccount::amount(addr)` / `Mint::supply(mint)` | `eq, le, lt, ge, gt (n)` |
-| `ReturnData` | `eq(bytes)` |
-| `Account::created/removed/closed (addr)` | lifecycle facts from the change set |
+### Bundles and invariants
 
-Every constructor returns the same concrete `Assert` type, which is why a
-plain array works — and every bound fact also pipes its measured value into a
-closure with `.with(..)`, map-style, for anything the comparators cannot
-spell. `Account::state(..).eq` decodes through the type's wincode
-schema and fails with the full decoded/expected pair; `Account::closed`
-asserts Solana's closed-account state (removed entirely, or retained empty
-and system-owned). The fixture nouns measure themselves: `Mint` installs mints
-and asserts their supply, `TokenAccount` installs token accounts and asserts
-their balances — one vocabulary for setup and verification.
-
-### Custom checks and invariants
-
-`Check` is the trait behind `check`: closures qualify, and structs implementing
-it give a protocol invariant a name. `test.invariant(..)` registers any check —
-built-in or custom — to run after every committed send (never on simulations),
-so an invariant is written once and enforced everywhere:
+`bundle([..])` turns several checks into one; `test.invariant(..)` registers
+any check — fact, bundle, or `CheckFn::new` closure — to run after every
+*successful* committed send (failed sends commit nothing; simulations never
+run invariants), so a protocol invariant is written once and enforced
+everywhere:
 
 ```rust,ignore
-struct Solvent { pool: Pubkey }
-
-impl Check for Solvent {
-    fn check(&self, outcome: &Outcome) {
-        Account::state(self.pool)
-            .with::<Pool>(|p| assert!(p.reserves >= p.obligations))
-            .check(outcome);
-    }
+fn solvent(pool: Pubkey) -> CheckFn {
+    Account::data(pool, |p: &Pool| p.reserves >= p.obligations)
 }
 
-test.invariant(Solvent { pool });                 // every send now enforces it
+test.invariant(solvent(pool));                    // every send now enforces it
 test.send(swap)
     .succeeds()
-    .check(|o: &Outcome| assert_eq!(o.logs().len(), 3));
+    .check(CheckFn::new(|tx| assert_eq!(tx.logs().len(), 3)));
 ```
 
-An invariant sees each send's `Outcome`, so the accounts it judges must be part
-of that transaction; guard on `outcome.account(..)` presence when an invariant
+An invariant sees each send's witness, so the accounts it judges must be part
+of that transaction; guard on `tx.account(..)` presence when an invariant
 only sometimes applies.
 
 Reads pull structured data back out:
@@ -318,7 +300,7 @@ unconsumed tail must be **all zero** — Solana's zero-initialized reserved padd
 as a growable or migration-target account carries. A *non-zero* trailing byte is
 the fingerprint of the wrong or a stale type read against the account, and
 **panics** rather than silently returning a value decoded from a prefix. The same
-contract applies to `read_at`'s suffix and to the `Account::state` checks.
+contract applies to `read_at`'s suffix and to the typed `Account::data` checks.
 
 **Owner is orthogonal in Rust.** A wincode read frames bytes only and never
 checks the account's owner, so pair it with `Account::owner` when ownership matters.

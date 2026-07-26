@@ -57,8 +57,8 @@ mod world;
 pub use dump::DumpPlan;
 
 pub use {
-    check::{Assert, Check, Cu, Measure, ReturnData},
-    outcome::Outcome,
+    check::{bundle, CheckFn, Cu, DataExpected, Expected, ExpectedBytes, Raw, ReturnData, Typed},
+    outcome::{FailedTransaction, Outcome, SucceededTransaction},
     parallax_svm_derive::parallax_test,
     setup::{SetupError, TestBuilder, PROGRAM_PATH_ENV},
     solana_instruction::{AccountMeta, Instruction},
@@ -97,15 +97,15 @@ pub fn co_signers(addresses: &[Pubkey]) -> Vec<AccountMeta> {
 /// Imports used by most program tests.
 pub mod prelude {
     pub use crate::{
-        co_signers,
+        bundle, co_signers,
         fixture::{
             AssociatedTokenAccount, Dump, Fixture, Load, Mint, Program, TokenAccount, TokenProgram,
             Wallet,
         },
-        parallax_test, system_program, Account, AccountChange, AccountMeta, Assert, Check, Cu,
-        Instruction, Outcome, ProgramError, Pubkey, ReturnData, Snapshot, Test,
-        DEFAULT_WALLET_LAMPORTS, SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID,
-        SPL_TOKEN_PROGRAM_ID,
+        parallax_test, system_program, Account, AccountChange, AccountMeta, CheckFn, Cu,
+        FailedTransaction, Instruction, Outcome, ProgramError, Pubkey, ReturnData, Snapshot,
+        SucceededTransaction, Test, DEFAULT_WALLET_LAMPORTS, SPL_ASSOCIATED_TOKEN_PROGRAM_ID,
+        SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
     };
 }
 
@@ -117,8 +117,8 @@ mod tests {
             co_signers,
             fixture::{AssociatedTokenAccount, Fixture, Mint, TokenAccount, TokenProgram, Wallet},
             setup::resolve_program_path_from_named,
-            system_program, Account, AccountMeta, Check, Instruction, Outcome, ProgramError,
-            Pubkey, SetupError, Test, DEFAULT_WALLET_LAMPORTS, SPL_TOKEN_2022_PROGRAM_ID,
+            system_program, Account, AccountMeta, CheckFn, Instruction, ProgramError, Pubkey,
+            SetupError, Test, DEFAULT_WALLET_LAMPORTS, SPL_TOKEN_2022_PROGRAM_ID,
         },
         spl_token::solana_program::program_option::COption,
         std::{fs, path::PathBuf},
@@ -537,9 +537,9 @@ mod tests {
         test.add(Wallet::account().at(payer));
         test.send(system_transfer(payer, recipient, amount))
             .succeeds()
-            .check([
-                Account::lamports(recipient).eq(amount),
-                Account::lamports(payer).with(|lamports| assert!(lamports > 0)),
+            .checks([
+                Account::lamports(recipient, amount),
+                Account::lamports(payer, |lamports| lamports > 0),
                 Account::created(recipient),
             ]);
     }
@@ -591,28 +591,22 @@ mod tests {
 
         test.send(transfer)
             .succeeds()
-            .check(Account::lamports(cosigner).eq(DEFAULT_WALLET_LAMPORTS));
+            .check(Account::lamports(cosigner, DEFAULT_WALLET_LAMPORTS));
     }
 
     /// A named protocol invariant: `account` never holds more than `max`
     /// lamports. Guards on presence, the realistic shape — an invariant only
     /// judges accounts the checked transaction touched.
-    struct Capped {
-        account: Pubkey,
-        max: u64,
-    }
-
-    impl Check for Capped {
-        fn check(&self, outcome: &Outcome) {
-            if let Some(account) = outcome.account(self.account) {
+    fn capped(account: Pubkey, max: u64) -> CheckFn {
+        CheckFn::new(move |tx| {
+            if let Some(account_state) = tx.account(account) {
                 assert!(
-                    account.lamports <= self.max,
-                    "cap exceeded for {}: {} lamports",
-                    self.account,
-                    account.lamports
+                    account_state.lamports <= max,
+                    "cap exceeded for {account}: {} lamports",
+                    account_state.lamports
                 );
             }
-        }
+        })
     }
 
     // A registered invariant is verified after every committed send — the
@@ -625,10 +619,7 @@ mod tests {
         let payer = Pubkey::new_from_array([1; 32]);
         let recipient = Pubkey::new_from_array([2; 32]);
         test.add(Wallet::account().at(payer));
-        test.invariant(Capped {
-            account: recipient,
-            max: 1_500_000_000,
-        });
+        test.invariant(capped(recipient, 1_500_000_000));
 
         test.send(system_transfer(payer, recipient, 1_000_000_000))
             .succeeds();
@@ -644,10 +635,7 @@ mod tests {
         let payer = Pubkey::new_from_array([1; 32]);
         let recipient = Pubkey::new_from_array([2; 32]);
         test.add(Wallet::account().at(payer));
-        test.invariant(Capped {
-            account: recipient,
-            max: 1,
-        });
+        test.invariant(capped(recipient, 1));
 
         test.simulate(system_transfer(payer, recipient, 1_000_000_000))
             .succeeds();

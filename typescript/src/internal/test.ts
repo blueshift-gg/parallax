@@ -469,10 +469,9 @@ export class TestCore<Address, Account, Instruction, Output> {
   /**
    * Register a check — or an array of them — verified after every committed
    * send. Define a protocol invariant once and every `send` in the test
-   * enforces it; the outcome an invariant sees is the same one the test
-   * asserts on. Invariants also run when the send itself fails (a failed
-   * transaction commits nothing), and never on simulations. Mirrors Rust
-   * `Test::invariant`.
+   * enforces it; the witness an invariant sees is the same one the test
+   * asserts on. Failed sends commit nothing and never run invariants, nor do
+   * simulations. Mirrors Rust `Test::invariant`.
    */
   invariant(
     check: ((outcome: Output) => void) | readonly ((outcome: Output) => void)[],
@@ -585,7 +584,9 @@ export class TestCore<Address, Account, Instruction, Output> {
         ),
     );
     const outcome = this.#adapter.outcome(result, accounts, changes);
-    if (commit) {
+    // Invariants judge only successful committed sends: a failed send commits
+    // nothing, and simulations never run them.
+    if (commit && result.status.ok) {
       for (const invariant of this.#invariants) invariant(outcome);
     }
     return outcome;

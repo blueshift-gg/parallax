@@ -40,7 +40,7 @@ pub struct Test {
     /// Whether the mixed-slot coherence warning has already fired for this world.
     pub(super) dump_warned: bool,
     /// Checks verified against every committed send's outcome.
-    pub(super) invariants: Vec<Box<dyn crate::Check>>,
+    pub(super) invariants: Vec<crate::CheckFn>,
 }
 
 impl Test {
@@ -297,16 +297,17 @@ impl Test {
         self.backend.set_compute_unit_limit(limit);
     }
 
-    /// Register a [`Check`](crate::Check) verified after every committed send.
+    /// Register a [`CheckFn`](crate::CheckFn) verified after every
+    /// successful committed send.
     ///
-    /// Define a protocol invariant once and every `send` in the test enforces
-    /// it — the outcome the invariant sees is the same one the test asserts
-    /// on. Invariants also run when the send itself fails (a failed
-    /// transaction commits nothing, so a previously holding invariant still
-    /// holds); simulations never run them. An invariant sees the outcome only:
-    /// the accounts it reads must be part of the transaction it checks.
-    pub fn invariant(&mut self, check: impl crate::Check + 'static) {
-        self.invariants.push(Box::new(check));
+    /// Define a protocol invariant once — a fact, a [`bundle`](crate::bundle),
+    /// or a [`CheckFn::new`](crate::CheckFn::new) closure — and every
+    /// succeeding `send` in the test enforces it against the same witness the
+    /// test would check. Failed sends commit nothing (an invariant that held
+    /// before still holds) and simulations never run invariants. An invariant
+    /// sees the transaction only: the accounts it reads must be part of it.
+    pub fn invariant(&mut self, check: crate::CheckFn) {
+        self.invariants.push(check);
     }
 
     /// Execute and commit one instruction.
@@ -538,10 +539,12 @@ impl Test {
             .flatten();
         let outcome = Outcome::from_backend(result, tracked)
             .with_hint(crate::dump::missing_account_hint(hint));
-        if commit {
+        if commit && outcome.is_ok() {
+            let tx = crate::SucceededTransaction(outcome);
             for invariant in &self.invariants {
-                invariant.check(&outcome);
+                invariant.run(&tx);
             }
+            return tx.0;
         }
         outcome
     }

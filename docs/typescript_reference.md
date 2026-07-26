@@ -116,53 +116,45 @@ Any `.parallax/` file is a shareable dump artifact `load` reads by path.
 Assertions throw with actionable messages and chain (`return this`); reads return
 plain values or `null`:
 
-The verdict is a method; every other assertion is a **check value** passed to
-`check`, mirroring Rust — name the fact, bind its subject, then compare:
+`succeeds()` yields the transaction witness checks run against, mirroring
+Rust. Every fact takes its subject and one expectation — a plain value means
+equality, a function is a predicate:
 
 ```ts
-import { Account, Cu, Mint, TokenAccount } from "parallax-svm/kit";
+import { Account, bundle, Cu, Mint, TokenAccount } from "parallax-svm/kit";
 
-test
-  .send(withdraw)
-  .succeeds()                                  // or: .fails({ type: "InsufficientFunds" })
-  .check([                                     //     .failsWith(6001)  — custom code
-    Cu.spent().le(20_000n),
-    Account.lamports(recipient).eq(1_000_000n),
-    Account.owner(vault).eq(test.programId),
-    TokenAccount.amount(userAta).eq(600n),
-    Mint.supply(mint).eq(1_000n),
-    Account.created(vault),
-    Account.state(VaultCodec, vault).eq({ authority, amount: 600n }),
-  ]);
+test.send(withdraw).succeeds().checks([
+  Cu.spent(cu => cu <= 20_000n),
+  Account.lamports(recipient, 1_000_000n),
+  Account.lamports(user, x => x > 0n),
+  Account.owner(vault, test.programId),
+  Account.data(VaultCodec, vault, v => v.amount === 600n),  // decoded via codec
+  Account.data(config, [1, 0, 0, 0]),                       // raw bytes
+  Account.created(vault),
+  Mint.supply(mint, 1_000n),
+  TokenAccount.amount(userAta, x => x >= 500n),
+]);
 ```
 
-The namespaces mirror Rust exactly — `Cu.spent()`, `Account.lamports(addr)`,
-`Account.owner(addr).eq`, `Account.data(addr).eq`,
-`Account.state(codec, addr).eq` (deep equality) / `.with(cb)`,
-`Account.created/removed/closed(addr)`, `TokenAccount.amount(addr)` /
-`Mint.supply(mint)`, and `ReturnData.eq`; numeric facts take
-`eq, le, lt, ge, gt`, and every bound fact pipes its value into a closure
-with `.with(..)`. In TypeScript a check is simply a function of the outcome.
+A check is simply a function of the witness; `bundle([..])` groups checks into
+one, and any `(tx) => void` closure is a custom check. `fails(..)` /
+`failsWith(..)` yield a failed-transaction witness with reads only.
 
-### Custom checks and invariants
+### Bundles and invariants
 
-Any `(outcome) => void` function is a check. `test.invariant(..)` registers one
-— built-in or custom — to run after every committed send (never on
-simulations), so a protocol invariant is written once and enforced everywhere:
+`test.invariant(..)` registers any check — fact, bundle, or closure — to run
+after every *successful* committed send (failed sends and simulations never
+run invariants):
 
 ```ts
-import { Account, type Check } from "parallax-svm/kit";
-
-const solvent: Check = Account.state(PoolCodec, pool).with(p =>
-  assert.ok(p.reserves >= p.obligations),
-);
+const solvent = Account.data(PoolCodec, pool, p => p.reserves >= p.obligations);
 
 test.invariant(solvent);                       // every send now enforces it
-test.send(swap).succeeds().check(outcome => assert.equal(outcome.logs.length, 3));
+test.send(swap).succeeds().check(tx => assert.equal(tx.logs.length, 3));
 ```
 
-An invariant sees each send's `Outcome`, so the accounts it judges must be part
-of that transaction; guard on `outcome.account(..)` returning `null` when an
+An invariant sees each send's witness, so the accounts it judges must be part
+of that transaction; guard on `tx.account(..)` returning `null` when an
 invariant only sometimes applies.
 
 `ProgramError` is a tagged union: `{ type: "InsufficientFunds" }`,
@@ -188,11 +180,11 @@ const vaultState = test.read(VaultCodec, vault);   // codec first, then address
 test.write(VaultCodec, vault, { authority, amount: 1_000n });
 ```
 
-`read`, `write`, and the `Account.state` checks validate `owner`, `discriminator`, and
+`read`, `write`, and the typed `Account.data` checks validate `owner`, `discriminator`, and
 `size` against the raw account before decoding, throwing precisely on any
 mismatch. This is the deliberate mirror of Rust: **TS codecs carry and validate
 `owner`** because generated bundles are self-framing, whereas Rust frames bytes
-only and keeps owner an orthogonal `Account::owner` / `Account.owner` check — available
+only and keeps owner an orthogonal `Account::owner` / `Account.owner` fact — available
 standalone here too.
 
 `deriveAta(owner, mint, tokenProgram?)` (defaulting `tokenProgram` to `"legacy"`),

@@ -161,43 +161,35 @@ impl Outcome {
             .collect()
     }
 
-    /// Assert success and keep the outcome available for chained assertions.
-    pub fn succeeds(&self) -> &Self {
+    /// Assert success, yielding the [`SucceededTransaction`] witness that
+    /// checks run against. Writing an account check on a failed transaction is
+    /// therefore a type error, not a runtime surprise.
+    pub fn succeeds(self) -> SucceededTransaction {
         if let Some(error) = &self.error {
             panic!("expected success, got {error}{}", self.formatted_logs());
         }
-        self
+        SucceededTransaction(self)
     }
 
-    /// Assert a typed custom program error.
-    pub fn fails_with<E>(&self, expected: E) -> &Self
+    /// Assert a typed custom program error, yielding the failed-transaction
+    /// witness for follow-up reads.
+    pub fn fails_with<E>(self, expected: E) -> FailedTransaction
     where
         E: Into<u32>,
     {
         self.fails(ProgramError::Custom(expected.into()))
     }
 
-    /// Assert a runtime or non-custom program error.
-    pub fn fails(&self, expected: ProgramError) -> &Self {
+    /// Assert a runtime or non-custom program error, yielding the
+    /// failed-transaction witness for follow-up reads.
+    pub fn fails(self, expected: ProgramError) -> FailedTransaction {
         assert_eq!(
             self.error.as_ref(),
             Some(&expected),
             "unexpected execution outcome{}",
             self.formatted_logs()
         );
-        self
-    }
-
-    /// Run a reusable [`Check`](crate::Check) against this outcome. Chainable.
-    ///
-    /// Accepts a built-in fact (`check([Cu::spent().le(5_000), Account::lamports(vault).eq(n)])`),
-    /// a struct implementing [`Check`](crate::Check), a closure, or an array
-    /// or tuple of checks. For a check verified after *every* committed send,
-    /// register it once with [`Test::invariant`](crate::Test::invariant)
-    /// instead.
-    pub fn check(&self, check: impl crate::Check) -> &Self {
-        check.check(self);
-        self
+        FailedTransaction(self)
     }
 
     fn formatted_logs(&self) -> String {
@@ -211,6 +203,49 @@ impl Outcome {
             formatted.push_str(hint);
         }
         formatted
+    }
+}
+
+/// A transaction proven successful by [`Outcome::succeeds`] — the context
+/// every [`CheckFn`](crate::CheckFn) runs against. All outcome reads are
+/// available through deref.
+pub struct SucceededTransaction(pub(crate) Outcome);
+
+impl SucceededTransaction {
+    /// Run one check or one [`bundle`](crate::bundle). Chainable.
+    pub fn check(&self, check: crate::CheckFn) -> &Self {
+        check.run(self);
+        self
+    }
+
+    /// Run several checks and/or bundles. Chainable.
+    pub fn checks(&self, checks: impl IntoIterator<Item = crate::CheckFn>) -> &Self {
+        for check in checks {
+            check.run(self);
+        }
+        self
+    }
+}
+
+impl core::ops::Deref for SucceededTransaction {
+    type Target = Outcome;
+
+    fn deref(&self) -> &Outcome {
+        &self.0
+    }
+}
+
+/// A transaction proven failed by [`Outcome::fails`] /
+/// [`Outcome::fails_with`]. A failed transaction commits nothing, so only the
+/// outcome reads (logs, error, compute units, changes) are available — checks
+/// are deliberately not.
+pub struct FailedTransaction(pub(crate) Outcome);
+
+impl core::ops::Deref for FailedTransaction {
+    type Target = Outcome;
+
+    fn deref(&self) -> &Outcome {
+        &self.0
     }
 }
 
@@ -244,12 +279,8 @@ pub(crate) fn mint_supply(account: &Account) -> u64 {
 mod tests {
     use {
         super::*,
-        crate::{Cu, ReturnData},
+        crate::{bundle, CheckFn, Cu, ReturnData},
     };
-
-    fn outcome_with_cu(compute_units: u64) -> Outcome {
-        outcome(&[], compute_units)
-    }
 
     fn outcome(logs: &[&str], compute_units: u64) -> Outcome {
         Outcome {
@@ -261,6 +292,10 @@ mod tests {
             changes: Vec::new(),
             hint: None,
         }
+    }
+
+    fn succeeded(compute_units: u64) -> SucceededTransaction {
+        outcome(&[], compute_units).succeeds()
     }
 
     #[test]
@@ -282,66 +317,37 @@ mod tests {
         assert_eq!(outcome.return_value(|bytes| Some(bytes[1])), Some(8));
     }
 
-    // Every comparator holds and rejects with its own boundary.
+    // A value expectation means equality; a closure is a predicate. Both are
+    // the same `CheckFn`, so they group in one array with bundles and ad-hoc
+    // closures.
     #[test]
-    fn cu_comparators_cover_their_boundaries() {
-        let ten = outcome(&[], 10);
-        ten.check([
-            Cu::spent().eq(10),
-            Cu::spent().le(10),
-            Cu::spent().lt(11),
-            Cu::spent().ge(10),
-            Cu::spent().gt(9),
+    fn expectations_are_values_or_predicates() {
+        succeeded(10).checks([
+            Cu::spent(10),
+            Cu::spent(|cu| cu <= 10),
+            ReturnData::is([9, 8, 7]),
+            ReturnData::is(|data: &[u8]| data.len() == 3),
+            bundle([Cu::spent(|cu| cu > 0), Cu::spent(|cu| cu < 11)]),
+            CheckFn::new(|tx| assert_eq!(tx.compute_units(), 10)),
         ]);
     }
 
     #[test]
-    #[should_panic(expected = "compute units: expected <= 9, consumed 10")]
-    fn cu_le_rejects_over_budget() {
-        outcome(&[], 10).check(Cu::spent().le(9));
+    #[should_panic(expected = "compute units: expected 9, got 10")]
+    fn value_expectations_print_expected_and_got() {
+        succeeded(10).check(Cu::spent(9));
     }
 
     #[test]
-    fn return_data_asserts_exact_bytes() {
-        outcome(&[], 0).check(ReturnData::eq([9, 8, 7]));
+    #[should_panic(expected = "predicate at")]
+    fn predicate_failures_name_their_construction_site() {
+        succeeded(10).check(Cu::spent(|cu| cu > 10));
     }
 
     #[test]
-    #[should_panic(expected = "unexpected return data")]
-    fn return_data_rejects_different_bytes() {
-        outcome(&[], 0).check(ReturnData::eq([9, 8]));
-    }
-
-    // `Assert::from_fn` lifts a closure into the built-ins' concrete type, so
-    // application facts group in the same arrays.
-    #[test]
-    fn from_fn_asserts_group_with_built_ins() {
-        outcome(&[], 10).check([
-            Cu::spent().le(10),
-            crate::Assert::from_fn(|o| assert_eq!(o.compute_units(), 10)),
-        ]);
-    }
-
-    // A check value runs through `check` in every accepted shape: built-in
-    // facts, a closure, and an array grouping several.
-    #[test]
-    fn check_accepts_facts_closures_and_arrays() {
-        let ran = core::cell::Cell::new(false);
-        outcome(&[], 10)
-            .check(Cu::spent().eq(10))
-            .check(|o: &Outcome| assert_eq!(o.compute_units(), 10))
-            .check([Cu::spent().le(10), Cu::spent().le(11)])
-            .check(|_: &Outcome| ran.set(true));
-        assert!(ran.get(), "closure checks must run");
-    }
-
-    // A minimal wincode account type: a discriminator-free struct whose schema
-    // covers the whole account, enough to exercise the typed `State` and
-    // `Owner` checks without a program.
-    #[derive(wincode::SchemaRead, wincode::SchemaWrite, Clone, PartialEq, Debug)]
-    struct Counter {
-        count: u64,
-        tag: u8,
+    #[should_panic(expected = "return data: expected [9, 8], got [9, 8, 7]")]
+    fn return_data_prints_both_sides() {
+        succeeded(0).check(ReturnData::is([9, 8]));
     }
 
     fn state_outcome(account: Account) -> Outcome {
@@ -356,140 +362,111 @@ mod tests {
         }
     }
 
+    // A minimal wincode account type: a discriminator-free struct whose schema
+    // covers the whole account, enough to exercise the typed `data` predicates
+    // without a program.
+    #[derive(wincode::SchemaRead, wincode::SchemaWrite, Clone, PartialEq, Debug)]
+    struct Counter {
+        count: u64,
+        tag: u8,
+    }
+
     fn counter_account(address: Pubkey, owner: Pubkey, counter: &Counter) -> Account {
         let data = wincode::serialize(counter).expect("Counter serializes");
         Account::new(address, owner, 42, data)
     }
 
     #[test]
-    fn state_checks_decode_typed_post_state() {
+    fn account_facts_measure_the_resulting_account() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
-        let outcome = state_outcome(counter_account(
+        let tx = state_outcome(counter_account(
             address,
             owner,
             &Counter { count: 7, tag: 3 },
-        ));
+        ))
+        .succeeds();
 
-        outcome.check([
-            Account::state(address).eq(Counter { count: 7, tag: 3 }),
-            Account::state(address).with::<Counter>(|value| assert_eq!(value.count, 7)),
+        tx.checks([
+            Account::lamports(address, 42),
+            Account::lamports(address, |x| x > 40),
+            Account::owner(address, owner),
+            Account::data(address, |counter: &Counter| counter.count == 7),
+            Account::data(address, |counter: &Counter| {
+                *counter == Counter { count: 7, tag: 3 }
+            }),
         ]);
+    }
+
+    #[test]
+    fn raw_data_expectations_compare_bytes() {
+        let address = Pubkey::new_from_array([5; 32]);
+        let owner = Pubkey::new_from_array([9; 32]);
+        let tx = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3])).succeeds();
+
+        tx.check(Account::data(address, [1, 2, 3]));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected [1, 2], got [1, 2, 3]")]
+    fn raw_data_expectations_print_both_sides() {
+        let address = Pubkey::new_from_array([5; 32]);
+        let owner = Pubkey::new_from_array([9; 32]);
+        let tx = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3])).succeeds();
+
+        tx.check(Account::data(address, [1, 2]));
     }
 
     #[test]
     #[should_panic(expected = "did not decode")]
-    fn state_checks_panic_when_bytes_do_not_decode() {
+    fn typed_data_predicates_panic_when_bytes_do_not_decode() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
         // Too few bytes for a Counter (needs nine), so the wincode decode fails.
-        let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
+        let tx = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3])).succeeds();
 
-        outcome.check(
-            Account::state(address)
-                .with::<Counter>(|_| unreachable!("the decode fails before the check runs")),
-        );
+        tx.check(Account::data(address, |_: &Counter| {
+            unreachable!("the decode fails before the predicate runs")
+        }));
     }
 
     #[test]
-    fn lamports_comparators_read_the_resulting_account() {
+    #[should_panic(expected = "owner of")]
+    fn owner_facts_reject_the_wrong_owner() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
-        let outcome = state_outcome(Account::new(address, owner, 42, Vec::new()));
+        let foreign = Pubkey::new_from_array([1; 32]);
+        let tx = state_outcome(counter_account(
+            address,
+            owner,
+            &Counter { count: 1, tag: 0 },
+        ))
+        .succeeds();
 
-        outcome.check([
-            Account::lamports(address).eq(42),
-            Account::lamports(address).ge(40),
-        ]);
-    }
-
-    // Every bound fact also pipes its measured value into a closure — the
-    // map-shaped sibling of the comparators, grouping in the same arrays.
-    #[test]
-    fn bound_facts_pipe_their_value_into_closures() {
-        let address = Pubkey::new_from_array([5; 32]);
-        let owner = Pubkey::new_from_array([9; 32]);
-        let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2]));
-
-        outcome.check([
-            Account::lamports(address).with(|lamports| assert_eq!(lamports, 42)),
-            Account::owner(address).with(move |program| assert_eq!(program, owner)),
-            Account::data(address).with(|data| assert_eq!(data, [1, 2])),
-        ]);
-        outcome_with_cu(10).check(Cu::spent().with(|cu| assert_eq!(cu, 10)));
+        tx.check(Account::owner(address, foreign));
     }
 
     #[test]
-    #[should_panic(expected = "outcome does not contain account")]
+    #[should_panic(expected = "transaction does not contain account")]
     fn account_facts_name_a_missing_account() {
         let missing = Pubkey::new_from_array([8; 32]);
-        outcome(&[], 0).check(Account::lamports(missing).eq(1));
+        succeeded(0).check(Account::lamports(missing, 1));
     }
 
     #[test]
-    fn changes_facts_read_the_change_set() {
+    fn lifecycle_facts_read_the_change_set() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
-        let created = Account::new(address, owner, 42, Vec::new());
+        let created = counter_account(address, owner, &Counter { count: 1, tag: 0 });
         let mut outcome = state_outcome(created.clone());
         outcome.changes = vec![crate::AccountChange::new(address, None, Some(created))];
 
-        outcome.check(Account::created(address));
+        outcome.succeeds().check(Account::created(address));
     }
 
     #[test]
     #[should_panic(expected = "did not change account")]
-    fn changes_facts_name_an_untouched_account() {
-        outcome(&[], 0).check(Account::created(Pubkey::new_from_array([8; 32])));
-    }
-
-    #[test]
-    fn data_check_asserts_exact_raw_bytes() {
-        let address = Pubkey::new_from_array([5; 32]);
-        let owner = Pubkey::new_from_array([9; 32]);
-        let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
-
-        outcome.check(Account::data(address).eq([1, 2, 3]));
-    }
-
-    #[test]
-    #[should_panic(expected = "unexpected account data")]
-    fn data_check_rejects_different_bytes() {
-        let address = Pubkey::new_from_array([5; 32]);
-        let owner = Pubkey::new_from_array([9; 32]);
-        let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
-
-        outcome.check(Account::data(address).eq([1, 2]));
-    }
-
-    #[test]
-    fn owner_check_asserts_account_ownership() {
-        let address = Pubkey::new_from_array([5; 32]);
-        let owner = Pubkey::new_from_array([9; 32]);
-        let outcome = state_outcome(counter_account(
-            address,
-            owner,
-            &Counter { count: 1, tag: 0 },
-        ));
-
-        outcome.check((
-            Account::owner(address).eq(owner),
-            Account::state(address).with::<Counter>(|value| assert_eq!(value.count, 1)),
-        ));
-    }
-
-    #[test]
-    #[should_panic(expected = "owned by")]
-    fn owner_check_rejects_the_wrong_owner() {
-        let address = Pubkey::new_from_array([5; 32]);
-        let owner = Pubkey::new_from_array([9; 32]);
-        let foreign = Pubkey::new_from_array([1; 32]);
-        let outcome = state_outcome(counter_account(
-            address,
-            owner,
-            &Counter { count: 1, tag: 0 },
-        ));
-
-        outcome.check(Account::owner(address).eq(foreign));
+    fn lifecycle_facts_name_an_untouched_account() {
+        succeeded(0).check(Account::created(Pubkey::new_from_array([8; 32])));
     }
 }
