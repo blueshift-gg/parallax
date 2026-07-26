@@ -32,14 +32,12 @@ import {
   type TokenAccountOptions as SharedTokenAccountOptions,
   type WalletOptions as SharedWalletOptions,
 } from "./internal/fixture.js";
-import { bundle, createChecks } from "./internal/check.js";
+import { bundle, createChecks, OutcomeFacts } from "./internal/check.js";
 import {
   Outcome as SharedOutcome,
   type AccountChange as SharedAccountChange,
   type AccountCodec as SharedAccountCodec,
   type Check as SharedCheck,
-  type FailedTransaction as SharedFailed,
-  type SucceededTransaction as SharedSucceeded,
 } from "./internal/outcome.js";
 import {
   SPL_ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -50,7 +48,7 @@ import {
 import {
   TestCore,
   type HarnessAdapter,
-  type TestOptions as SharedTestOptions,
+  type CtxOptions as SharedCtxOptions,
 } from "./internal/test.js";
 
 export { DEFAULT_WALLET_LAMPORTS, TokenProgram };
@@ -58,7 +56,7 @@ export type { ProgramError } from "./internal/outcome.js";
 export type { AssociatedTokenAccountOptions };
 
 type WorldAccount = KitAccount<Uint8Array>;
-export type Fixture<Output> = SharedFixture<Output, Test>;
+export type Fixture<Output> = SharedFixture<Output, Ctx>;
 export type Outcome = SharedOutcome<Address, WorldAccount>;
 export type AccountChange = SharedAccountChange<Address, WorldAccount>;
 export type Check = SharedCheck<Address, WorldAccount>;
@@ -72,7 +70,7 @@ export type TokenAccountOptions = SharedTokenAccountOptions<Address>;
 export type AccountOptions = SharedAccountOptions<Address>;
 export type DumpOptions = SharedDumpOptions<Address>;
 export type { LoadOptions };
-export type TestOptions = SharedTestOptions;
+export type CtxOptions = SharedCtxOptions;
 
 /** Account metas for read-only co-signers, e.g. multisig signers. */
 export function coSigners(
@@ -187,13 +185,14 @@ const adapter: HarnessAdapter<Address, WorldAccount, Instruction, Outcome> = {
 /** The built-in fact namespaces for `check([..])` and `invariant(..)`. */
 export const { Cu, Account, Mint, TokenAccount, ReturnData } =
   createChecks(adapter);
+
+/** The verdict facts, sharing the `Outcome` name with the outcome type. */
+export const Outcome = OutcomeFacts;
 export { bundle };
-export type SucceededTransaction = SharedSucceeded<Address, WorldAccount>;
-export type FailedTransaction = SharedFailed<Address, WorldAccount>;
 
 /** An isolated fixture-first test world using Kit address and account types. */
-export class Test extends TestCore<Address, WorldAccount, Instruction, Outcome> {
-  constructor(programId?: Address, elf?: Uint8Array, options: TestOptions = {}) {
+export class Ctx extends TestCore<Address, WorldAccount, Instruction, Outcome> {
+  constructor(programId?: Address, elf?: Uint8Array, options: CtxOptions = {}) {
     super(adapter, programId, elf, options);
   }
 
@@ -210,19 +209,19 @@ export class Test extends TestCore<Address, WorldAccount, Instruction, Outcome> 
   static async open(
     programId: Address,
     programPath?: string,
-    options?: TestOptions,
-  ): Promise<Test> {
+    options?: CtxOptions,
+  ): Promise<Ctx> {
     const resolved = programPath ?? process.env.PARALLAX_PROGRAM_PATH;
     if (!resolved) {
       throw new Error(
-        "no program artifact: pass a path to Test.open(id, path), or set PARALLAX_PROGRAM_PATH",
+        "no program artifact: pass a path to Ctx.open(id, path), or set PARALLAX_PROGRAM_PATH",
       );
     }
-    return new Test(programId, await readFile(resolved), options);
+    return new Ctx(programId, await readFile(resolved), options);
   }
 }
 
-const fixtures = createFixtureFactories<Address, Test & FixtureHost<Address>>();
+const fixtures = createFixtureFactories<Address, Ctx & FixtureHost<Address>>();
 
 export const {
   account,

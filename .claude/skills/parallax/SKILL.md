@@ -6,7 +6,7 @@ description: Write, run, or fix Solana program tests with Parallax (parallax-svm
 # Testing Solana programs with Parallax
 
 One mental model: **install pre-state as fixtures, send instructions, assert
-the outcome.** `test.add` is the only setup primitive; every execution returns
+the outcome.** `ctx.add` is the only setup primitive; every execution returns
 an `Outcome` you chain assertions on. The Rust and TypeScript APIs mirror each
 other — anything shown in one exists in the other.
 
@@ -19,28 +19,29 @@ ancestor `target/deploy` (or `PARALLAX_PROGRAM_PATH` when a runner sets it).
 use parallax_svm::prelude::*;
 
 #[parallax_test]                        // program id defaults to crate::ID
-fn deposits(test: &mut Test) {
-    let user = test.add(Wallet::account());
+fn deposits() {
+    let user = ctx.add(Wallet::account());
 
-    test.execute(DepositInstruction { user, amount: 1_000_000_000 })
-        .succeeds()
-        .checks([Cu::spent(|cu| cu <= 10_000), Account::lamports(vault, 1_000_000_000)]);
+    ctx.execute(DepositInstruction { user, amount: 1_000_000_000 })
+        .checks([
+    Outcome::success(),
+    Cu::spent(|cu| cu <= 10_000), Account::lamports(vault, 1_000_000_000)]);
 }
 ```
 
-`#[parallax_test(program_id = EXPR)]` targets another program. `Test::builder(id)`
+`#[parallax_test(program_id = EXPR)]` targets another program. `Ctx::builder(id)`
 configures by hand: `.rpc(url)`, `.compute_unit_limit(n)`, `.program_bytes(elf)`,
 `.no_program()`, then `.build()`.
 
 ## Golden path (TypeScript)
 
 ```ts
-import { Test, wallet } from "parallax-svm/kit"; // or parallax-svm/web3.js
+import { Ctx, wallet } from "parallax-svm/kit"; // or parallax-svm/web3.js
 
-using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/my_program.so");
-const user = await test.add(wallet());
-test.execute(await client.createDepositInstruction({ user, amount: 1_000_000_000n }))
-    .succeeds()
+using test = await Ctx.open(PROGRAM_ADDRESS, "target/deploy/my_program.so");
+const user = await ctx.add(wallet());
+ctx.execute(await client.createDepositInstruction({ user, amount: 1_000_000_000n }))
+    .check(Outcome::success())
     .check(Cu.spent(cu => cu <= 10_000n));
 ```
 
@@ -58,31 +59,31 @@ account enters empty on purpose (see semantics below). Pick by what you need:
 | Actors at known addresses | `Wallet::accounts([A, B]).fund(n)` | `wallet({ accounts: [A, B], fund })` |
 | A mint | `Mint::account().with_supply(n).decimals(d).with_authority(a)` | `mint({ supply, decimals, authority })` |
 | A funded holder set | `Mint::account().with_supply(1_000).with_holder([(user, 400)])` — one funded ATA per holder | `mint({ supply, holders: [[user, 400n]] })` |
-| N fresh mints | `let [a, b] = test.add(Mint::accounts().with_supply(9));` — N inferred from the pattern | `mint({ count: 2 })` |
+| N fresh mints | `let [a, b] = ctx.add(Mint::accounts().with_supply(9));` — N inferred from the pattern | `mint({ count: 2 })` |
 | A token account | `TokenAccount::account(mint, owner).with_amount(n)` · pinned plural `TokenAccount::accounts([A, B], mint, owner)` | `tokenAccount(mint, owner, { amount })` |
 | An ATA | `AssociatedTokenAccount::account(mint, owner).with_amount(n)` | `associatedTokenAccount(mint, owner, { amount })` |
 | Raw bytes | `Account::new(addr, owner_program, lamports, data)` | `account({ address, owner, data })` |
 | A CPI callee | `Program::new(id, elf)` | `program(id, elf)` |
 
-Every fixture returns its address(es) from `test.add` — thread the handles,
+Every fixture returns its address(es) from `ctx.add` — thread the handles,
 never hardcode. Composition is one algebra: tuples install heterogeneous
-worlds in one `add` (`let (maker, mint) = test.add((Wallet::account(),
+worlds in one `add` (`let (maker, mint) = ctx.add((Wallet::account(),
 Mint::account()));`), `Wallet::account().holding(mint, n)` carries token
 balances inside the actor, and closures are fixtures — a protocol world is a
-plain function `|t: &mut Test| -> W` that adds fixtures, may register
+plain function `|t: &mut Ctx| -> W` that adds fixtures, may register
 `t.invariant(..)` (a self-verifying world), and returns its handles.
 
 ## Mainnet state
 
 ```rust
-let [pool, oracle] = test.add(Dump::accounts([POOL, ORACLE]));  // fetch once,
-test.add(Dump::program(AMM_PROGRAM).sync_clock());              // then offline
-test.add(Load::accounts("fixtures/pool.dump"));                 // from a file
+let [pool, oracle] = ctx.add(Dump::accounts([POOL, ORACLE]));  // fetch once,
+ctx.add(Dump::program(AMM_PROGRAM).sync_clock());              // then offline
+ctx.add(Load::accounts("fixtures/pool.dump"));                 // from a file
 ```
 
 First run fetches (one batched call, one slot) into a committed `.parallax/`
 store; warm runs never touch the network. `sync_clock()` adopts the dumped
-slot's clock. RPC comes from `Test::builder(id).rpc(url)`, default mainnet.
+slot's clock. RPC comes from `Ctx::builder(id).rpc(url)`, default mainnet.
 TS: `dump({ accounts })`, `dump.program(id)`, `load({ path })`.
 
 ## Asserting
@@ -94,8 +95,8 @@ instruction chain, `…_with` variants take raw transaction-input accounts.
 **The verdict is a method; every fact is a check value.** One grammar:
 
 ```rust
-test.execute(withdraw)
-    .succeeds()                          // .fails(ProgramError::…) / .fails_with(MyError::Code)
+ctx.execute(withdraw)
+    .check(Outcome::success())                          // .check(Outcome::error(ProgramError::…)) / .check(Outcome::error(MyError::Code))
     .checks([
         Cu::spent(|cu| cu <= 20_000),    // value ⇒ equality, closure ⇒ predicate
         Account::lamports(addr, n),
@@ -112,8 +113,9 @@ test.execute(withdraw)
 TS mirrors every namespace (`Cu.spent(cu => cu <= n)`, `Account.lamports(a, n)`,
 `Account.data(codec, addr, v => ..)`). `bundle([..])` groups checks into one
 value; `CheckFn::new(|tx| ..)` (TS: any `(tx) => void`) is the whole-transaction
-escape. `succeeds()` returns the witness checks run on; `fails_with` yields a
-read-only failed witness.
+escape. Verdicts are checks — `Outcome::success()` / `Outcome::error(e)` — and
+facts self-diagnose: on a failed transaction they panic with the real error
+and logs. Assert unchanged state after a failure with `ctx` reads, not facts.
 
 Reads (not asserts): `account(addr)`, `accounts()`, `logs()`, `return_value()`,
 `compute_units()`, `events(decode)`, `account_changes()`.
@@ -122,19 +124,19 @@ Reads (not asserts): `account(addr)`, `accounts()`, `logs()`, `return_value()`,
 struct — to run after every committed execution (never on simulations):
 
 ```rust
-test.invariant(Solvent { pool });        // enforced on every send from here on
+ctx.invariant(Solvent { pool });        // enforced on every send from here on
 ```
 
 ## Typed state
 
 ```rust
-test.write(addr, program_id, MyState { .. });   // wincode-serialize + install
-let s = test.read::<MyState>(addr);             // decode full account data
+ctx.write(addr, program_id, MyState { .. });   // wincode-serialize + install
+let s = ctx.read::<MyState>(addr);             // decode full account data
 ```
 
 Rust types derive wincode schemas; generated client account types frame their
 own discriminator. TS uses generated `{Name}Account` codec bundles:
-`test.read(VaultAccount, addr)` / `Account.data(VaultAccount, addr, pred)`.
+`ctx.read(VaultAccount, addr)` / `Account.data(VaultAccount, addr, pred)`.
 
 ## Semantics you must not fight
 
@@ -152,7 +154,7 @@ own discriminator. TS uses generated `{Name}Account` codec bundles:
   CPI signed with their seeds.
 - **Determinism.** Identical runs are byte-identical; fixture addresses match
   across Rust/Kit/Web3.js. Never sleep or poll; set time with
-  `test.warp_to_timestamp(ts)`.
+  `ctx.warp_to_timestamp(ts)`.
 
 ## When a test fails
 

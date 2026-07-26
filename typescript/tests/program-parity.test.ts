@@ -8,14 +8,16 @@ import {
 import { Address as Web3Address } from "@solana/web3.js";
 import {
   Account as KAccount,
+  Outcome as KOutcome,
   Cu as KCu,
-  Test as KitTest,
+  Ctx as KitCtx,
   wallet as kitWallet,
 } from "../src/kit.js";
 import {
   Account as WAccount,
+  Outcome as WOutcome,
   Cu as WCu,
-  Test as Web3Test,
+  Ctx as Web3Ctx,
   wallet as web3Wallet,
 } from "../src/web3.js";
 import {
@@ -46,7 +48,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
   it("runs the Rust contract through the Kit adapter", async () => {
     const client = new KitVaultClient();
     const user = getAddressDecoder().decode(userBytes) as KitAddress;
-    using test = await KitTest.open(PROGRAM_ADDRESS, elfPath, {
+    using test = await KitCtx.open(PROGRAM_ADDRESS, elfPath, {
       computeUnitLimit: 10_000n,
     });
     await test.add(kitWallet({ address: user }));
@@ -61,7 +63,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
 
     const deposit = test
       .execute(depositInstruction)
-      .succeeds()
+      .check(WOutcome.success())
       .check(KCu.spent(cu => cu <= 1_556n))
       .check(KAccount.lamports(vault, depositAmount))
       .check(KAccount.lamports(user, startingLamports - depositAmount));
@@ -92,7 +94,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
           amount: withdrawalAmount,
         }),
       )
-      .succeeds()
+      .check(KOutcome.success())
       .check(KCu.spent(cu => cu <= 1_600n))
       .check(KAccount.lamports(vault, depositAmount - withdrawalAmount))
       .check(
@@ -111,7 +113,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
           { vault: wrongVault },
         ),
       )
-      .failsWith(PROGRAM_ERROR_CODES.InvalidPda);
+      .check(KOutcome.error(PROGRAM_ERROR_CODES.InvalidPda));
     expect(rejected.account(wrongVault)).toBeNull();
     expect(rejected.accountChanges).toEqual([]);
     expect(test.account(wrongVault)).toBeNull();
@@ -123,23 +125,24 @@ describe.skipIf(!programPath)("vault program parity", () => {
           amount: depositAmount + 1n,
         }),
       )
-      .fails({ type: "InsufficientFunds" })
-      .check(KAccount.lamports(vault, depositAmount));
+      .check(KOutcome.error({ type: "InsufficientFunds" }));
+    // A failed transaction commits nothing: the vault balance is a world read.
+    expect(test.lamports(vault)).toBe(depositAmount);
     test.warpToTimestamp(42n);
 
-    using limited = await KitTest.open(PROGRAM_ADDRESS, elfPath, {
+    using limited = await KitCtx.open(PROGRAM_ADDRESS, elfPath, {
       computeUnitLimit: 1n,
     });
     await limited.add(kitWallet({ address: user }));
     limited
       .execute(await client.createDepositInstruction({ user, amount: 1n }))
-      .fails({ type: "Runtime", message: "ProgramFailedToComplete" });
+      .check(KOutcome.error({ type: "Runtime", message: "ProgramFailedToComplete" }));
   });
 
   it("runs the same contract through the Web3.js adapter", async () => {
     const client = new Web3VaultClient();
     const user = new Web3Address(userBytes);
-    using test = await Web3Test.open(Web3VaultClient.programId, elfPath, {
+    using test = await Web3Ctx.open(Web3VaultClient.programId, elfPath, {
       computeUnitLimit: 10_000n,
     });
     await test.add(web3Wallet({ address: user }));
@@ -154,7 +157,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
 
     const deposit = test
       .execute(depositInstruction)
-      .succeeds()
+      .check(KOutcome.success())
       .check(WCu.spent(cu => cu <= 1_556n))
       .check(WAccount.lamports(vault, depositAmount))
       .check(WAccount.lamports(user, startingLamports - depositAmount));
@@ -188,7 +191,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
           amount: withdrawalAmount,
         }),
       )
-      .succeeds()
+      .check(KOutcome.success())
       .check(WCu.spent(cu => cu <= 1_600n))
       .check(WAccount.lamports(vault, depositAmount - withdrawalAmount))
       .check(
@@ -205,7 +208,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
           { vault: wrongVault },
         ),
       )
-      .failsWith(WEB3_PROGRAM_ERROR_CODES.InvalidPda);
+      .check(KOutcome.error(WEB3_PROGRAM_ERROR_CODES.InvalidPda));
     expect(rejected.account(wrongVault)).toBeNull();
     expect(rejected.accountChanges).toEqual([]);
     expect(test.account(wrongVault)).toBeNull();
@@ -217,17 +220,17 @@ describe.skipIf(!programPath)("vault program parity", () => {
           amount: depositAmount + 1n,
         }),
       )
-      .fails({ type: "InsufficientFunds" })
-      .check(WAccount.lamports(vault, depositAmount));
+      .check(WOutcome.error({ type: "InsufficientFunds" }));
+    expect(test.lamports(vault)).toBe(depositAmount);
     test.warpToTimestamp(42n);
 
-    using limited = await Web3Test.open(Web3VaultClient.programId, elfPath, {
+    using limited = await Web3Ctx.open(Web3VaultClient.programId, elfPath, {
       computeUnitLimit: 1n,
     });
     await limited.add(web3Wallet({ address: user }));
     limited
       .execute(await client.createDepositInstruction({ user, amount: 1n }))
-      .fails({ type: "Runtime", message: "ProgramFailedToComplete" });
+      .check(KOutcome.error({ type: "Runtime", message: "ProgramFailedToComplete" }));
   });
 
 });

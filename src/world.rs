@@ -5,7 +5,7 @@ use {
         dump::DumpTransport,
         fixture::{Fixture, TokenProgram},
         outcome::{mint_supply, token_amount, TrackedAccount},
-        Account, Instruction, Outcome, Pubkey, SetupError, TestBuilder,
+        Account, CtxBuilder, Instruction, Outcome, Pubkey, SetupError,
     },
     std::{ops::Deref, path::Path},
     wincode::{config::DefaultConfig, SchemaRead, SchemaWrite},
@@ -65,10 +65,10 @@ pub const DEFAULT_WALLET_LAMPORTS: u64 = 10_000_000_000;
 
 /// An isolated Solana program test world.
 ///
-/// Each `Test` owns its runtime and account state. The public API describes
+/// Each `Ctx` owns its runtime and account state. The public API describes
 /// test behavior rather than a particular SVM, so the same test can be hosted
 /// by additional runtimes without becoming generic over a backend.
-pub struct Test {
+pub struct Ctx {
     pub(super) backend: Backend,
     pub(super) program_id: Pubkey,
     pub(super) program_path: std::path::PathBuf,
@@ -92,7 +92,7 @@ pub struct Test {
     pub(super) invariants: Vec<crate::CheckFn>,
 }
 
-impl Test {
+impl Ctx {
     /// Assemble a world from its loaded backend and its dump configuration.
     pub(crate) fn from_parts(
         backend: Backend,
@@ -135,8 +135,8 @@ impl Test {
     }
 
     /// Configure artifact discovery and runtime limits before loading a world.
-    pub fn builder(program_id: impl Into<Pubkey>) -> TestBuilder {
-        TestBuilder::new(program_id.into())
+    pub fn builder(program_id: impl Into<Pubkey>) -> CtxBuilder {
+        CtxBuilder::new(program_id.into())
     }
 
     /// The primary program under test.
@@ -337,11 +337,11 @@ impl Test {
 
     /// Set the transaction compute-unit limit for this world.
     ///
-    /// The builder equivalent is [`TestBuilder::compute_unit_limit`]; this
+    /// The builder equivalent is [`CtxBuilder::compute_unit_limit`]; this
     /// reconfigures the budget on an already-built world, preserving every
     /// loaded program and installed account.
     ///
-    /// [`TestBuilder::compute_unit_limit`]: crate::TestBuilder::compute_unit_limit
+    /// [`CtxBuilder::compute_unit_limit`]: crate::CtxBuilder::compute_unit_limit
     pub fn set_compute_unit_limit(&mut self, limit: u64) {
         self.backend.set_compute_unit_limit(limit);
     }
@@ -521,11 +521,9 @@ impl Test {
         let outcome = Outcome::from_backend(result, tracked)
             .with_hint(crate::dump::missing_account_hint(hint));
         if commit && outcome.is_ok() {
-            let tx = crate::SucceededTransaction(outcome);
             for invariant in &self.invariants {
-                invariant.run(&tx);
+                invariant.run(&outcome);
             }
-            return tx.0;
         }
         outcome
     }
@@ -549,12 +547,12 @@ fn assert_unique_accounts(accounts: &[Account]) {
 }
 
 /// Decode `data` (from `offset`) as `T` via wincode's [`DefaultConfig`]. Shared
-/// by [`Test::read`], [`Test::read_at`], and the [`State`](crate::State) checks so
+/// by [`Ctx::read`], [`Ctx::read_at`], and the [`State`](crate::State) checks so
 /// every typed read takes the same decode path. `context` names the calling
 /// operation so panics stay actionable.
 ///
 /// wincode reads exactly `T`'s serialized bytes and stops, so a schema shorter
-/// than the account leaves a tail. This enforces the [`Test::read`] contract:
+/// than the account leaves a tail. This enforces the [`Ctx::read`] contract:
 /// the tail must be all zero — Solana's zero-initialized reserved padding, the
 /// one legitimate longer-than-typed shape (a growable or migration-target
 /// account). A *non-zero* unconsumed byte is the fingerprint of the wrong or a

@@ -1,7 +1,7 @@
 //! Composable fixtures for common Solana accounts and programs.
 
 use {
-    crate::{accounts, Account, Pubkey, Test, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID},
+    crate::{accounts, Account, Ctx, Pubkey, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID},
     std::path::PathBuf,
 };
 
@@ -17,22 +17,22 @@ pub trait Fixture {
     type Output;
 
     /// Install the fixture and return the handles needed by the test.
-    fn install(self, test: &mut Test) -> Self::Output;
+    fn install(self, test: &mut Ctx) -> Self::Output;
 }
 
-/// Closures are fixtures: `|t: &mut Test| { ... }` installs by running, and
+/// Closures are fixtures: `|t: &mut Ctx| { ... }` installs by running, and
 /// its return value is the output — the dependency mechanism for worlds where
 /// later fixtures need earlier handles. A world function returns one:
 ///
 /// ```rust,ignore
 /// fn escrow_world(funding: u64) -> impl Fixture<Output = EscrowWorld> {
-///     move |t: &mut Test| { /* add fixtures, register invariants */ }
+///     move |t: &mut Ctx| { /* add fixtures, register invariants */ }
 /// }
 /// ```
-impl<O, F: FnOnce(&mut Test) -> O> Fixture for F {
+impl<O, F: FnOnce(&mut Ctx) -> O> Fixture for F {
     type Output = O;
 
-    fn install(self, test: &mut Test) -> O {
+    fn install(self, test: &mut Ctx) -> O {
         self(test)
     }
 }
@@ -44,7 +44,7 @@ macro_rules! impl_fixture_for_tuple {
         impl<$($name: Fixture),+> Fixture for ($($name,)+) {
             type Output = ($($name::Output,)+);
 
-            fn install(self, test: &mut Test) -> Self::Output {
+            fn install(self, test: &mut Ctx) -> Self::Output {
                 #[allow(non_snake_case)]
                 let ($($name,)+) = self;
                 ($($name.install(test),)+)
@@ -61,7 +61,7 @@ impl_fixture_for_tuple!(A, B, C, D, E);
 impl<F: Fixture, const N: usize> Fixture for [F; N] {
     type Output = [F::Output; N];
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         self.map(|fixture| fixture.install(test))
     }
 }
@@ -72,7 +72,7 @@ impl<F: Fixture, const N: usize> Fixture for [F; N] {
 /// bare [`Mint`] yields `N` *distinct* accounts.
 fn install_clones<F: Fixture + Clone, const N: usize>(
     fixture: &F,
-    test: &mut Test,
+    test: &mut Ctx,
 ) -> [F::Output; N] {
     core::array::from_fn(|_| fixture.clone().install(test))
 }
@@ -80,7 +80,7 @@ fn install_clones<F: Fixture + Clone, const N: usize>(
 impl Fixture for Account {
     type Output = Pubkey;
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         let address = self.address;
         test.set_account(self);
         address
@@ -161,7 +161,7 @@ impl<const N: usize> Wallets<N> {
 impl<const N: usize> Fixture for Wallets<N> {
     type Output = [Pubkey; N];
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         for address in &self.addresses {
             test.set_account(accounts::system_account(*address, self.lamports));
         }
@@ -172,7 +172,7 @@ impl<const N: usize> Fixture for Wallets<N> {
 impl Fixture for Wallet {
     type Output = Pubkey;
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         let address = self.address.unwrap_or_else(|| test.fresh_address());
         test.set_account(accounts::system_account(address, self.lamports));
         for (mint, amount) in self.holdings {
@@ -342,7 +342,7 @@ impl<const N: usize> Mints<N> {
 impl<const N: usize> Fixture for Mints<N> {
     type Output = [Pubkey; N];
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         install_clones(&self.0, test)
     }
 }
@@ -350,7 +350,7 @@ impl<const N: usize> Fixture for Mints<N> {
 impl Fixture for Mint {
     type Output = Pubkey;
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         let address = test.fresh_address();
         test.set_account(accounts::token_program_mint_account(
             address,
@@ -458,7 +458,7 @@ impl<const N: usize> TokenAccounts<N> {
 impl<const N: usize> Fixture for TokenAccounts<N> {
     type Output = [Pubkey; N];
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         for address in &self.addresses {
             test.set_account(accounts::token_program_account(
                 *address,
@@ -475,7 +475,7 @@ impl<const N: usize> Fixture for TokenAccounts<N> {
 impl Fixture for TokenAccount {
     type Output = Pubkey;
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         let address = self.address.unwrap_or_else(|| test.fresh_address());
         test.set_account(accounts::token_program_account(
             address,
@@ -530,7 +530,7 @@ impl AssociatedTokenAccount {
 impl Fixture for AssociatedTokenAccount {
     type Output = Pubkey;
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         let account = accounts::associated_token_account_with_program(
             self.owner,
             self.mint,
@@ -548,14 +548,14 @@ impl Fixture for AssociatedTokenAccount {
 /// `Dump` fills a committed `.parallax/` store next to the consuming project's
 /// manifest, so the first run fetches once and every later run is fully offline
 /// and deterministic. The RPC endpoint comes from
-/// [`Test::builder(id).rpc(url)`](crate::TestBuilder::rpc); unset, it defaults to
+/// [`Ctx::builder(id).rpc(url)`](crate::CtxBuilder::rpc); unset, it defaults to
 /// the public mainnet-beta RPC.
 ///
 /// ```rust,ignore
 /// use parallax_svm::prelude::*;
 ///
 /// #[parallax_test]
-/// fn against_real_state(test: &mut Test) {
+/// fn against_real_state(test: &mut Ctx) {
 ///     // Fetched once at one slot, then served from `.parallax/` offline.
 ///     let [pool, oracle] = test.add(Dump::accounts([POOL, ORACLE]));
 ///     test.add(Dump::program(AMM_PROGRAM));
@@ -618,7 +618,7 @@ impl<const N: usize> DumpAccounts<N> {
 impl<const N: usize> Fixture for DumpAccounts<N> {
     type Output = [Pubkey; N];
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         test.dump_accounts_native(&self.addresses, self.sync_clock);
         self.addresses
     }
@@ -641,7 +641,7 @@ impl DumpProgram {
 impl Fixture for DumpProgram {
     type Output = Pubkey;
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         test.dump_program_native(self.program_id, self.sync_clock);
         self.program_id
     }
@@ -653,7 +653,7 @@ pub struct DumpRefresh;
 impl Fixture for DumpRefresh {
     type Output = Vec<Pubkey>;
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         test.refresh_all_native()
     }
 }
@@ -670,7 +670,7 @@ impl Fixture for DumpRefresh {
 /// use parallax_svm::prelude::*;
 ///
 /// #[parallax_test]
-/// fn against_a_shared_dump(test: &mut Test) {
+/// fn against_a_shared_dump(test: &mut Ctx) {
 ///     let accounts = test.add(Load::accounts("fixtures/pool.dump"));
 ///     test.add(Load::program("fixtures/amm.dump"));
 ///     // ...
@@ -703,7 +703,7 @@ pub struct LoadAccounts {
 impl Fixture for LoadAccounts {
     type Output = Vec<Pubkey>;
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         test.load_file_native(&self.path, false)
     }
 }
@@ -716,7 +716,7 @@ pub struct LoadProgram {
 impl Fixture for LoadProgram {
     type Output = Pubkey;
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         test.load_file_native(&self.path, true)
             .into_iter()
             .next()
@@ -740,7 +740,7 @@ impl<'a> Program<'a> {
 impl Fixture for Program<'_> {
     type Output = Pubkey;
 
-    fn install(self, test: &mut Test) -> Self::Output {
+    fn install(self, test: &mut Ctx) -> Self::Output {
         test.preload_program(self.id, self.elf);
         self.id
     }

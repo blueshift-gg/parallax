@@ -8,13 +8,13 @@ implementation detail; depend on `parallax-svm` and use it through the prelude:
 use parallax_svm::prelude::*;
 
 #[parallax_test]
-fn initializes(test: &mut Test) {
-    let authority = test.add(Wallet::account());
-    test.execute(InitializeInstruction { authority }).succeeds();
+fn initializes() {
+    let authority = ctx.add(Wallet::account());
+    ctx.execute(InitializeInstruction { authority }).check(Outcome::success());
 }
 ```
 
-`#[parallax_test]` expands to a plain `#[test]` that builds an isolated `Test`
+`#[parallax_test]` expands to a plain `#[test]` that builds an isolated `Ctx`
 world loaded with the current crate's compiled program. It uses `crate::ID` as
 the program address by default; pass `#[parallax_test(program_id = EXPR)]` to
 target another program.

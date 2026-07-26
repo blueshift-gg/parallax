@@ -12,11 +12,12 @@ import { Address, TransactionInstruction } from "@solana/web3.js";
 import { getTokenDecoder } from "@solana-program/token";
 import {
   Account as KAccount,
+  Outcome as KOutcome,
   Cu as KCu,
   ReturnData as KReturnData,
   TokenAccount as KTokenAccount,
   DEFAULT_WALLET_LAMPORTS,
-  Test as KitTest,
+  Ctx as KitTest,
   account as kitAccount,
   addressesEqual as kitAddressesEqual,
   associatedTokenAccount as kitAssociatedTokenAccount,
@@ -28,10 +29,11 @@ import {
 } from "../src/kit.js";
 import {
   Account as WAccount,
+  Outcome as WOutcome,
   Cu as WCu,
   ReturnData as WReturnData,
   TokenAccount as WTokenAccount,
-  Test as Web3Test,
+  Ctx as Web3Test,
   account as web3Account,
   addressesEqual as web3AddressesEqual,
   associatedTokenAccount as web3AssociatedTokenAccount,
@@ -124,7 +126,7 @@ describe("fixture-first test harness", () => {
 
     const outcome = test
       .execute(transfer)
-      .succeeds()
+      .check(KOutcome.success())
       .check(KTokenAccount.amount(alice, 4_000n))
       .check(KTokenAccount.amount(bob, 1_000n))
       .check(KCu.spent(cu => cu <= 20_000n));
@@ -136,11 +138,12 @@ describe("fixture-first test harness", () => {
 
     test
       .execute({ ...transfer, data: transferData(10_000n) })
-      .failsWith(1)
-      .check(KTokenAccount.amount(alice, 4_000n))
-      .check(KTokenAccount.amount(bob, 1_000n));
+      .check(KOutcome.error(1));
+    // A failed transaction commits nothing; unchanged balances are world reads.
+    expect(test.tokens(alice)).toBe(4_000n);
+    expect(test.tokens(bob)).toBe(1_000n);
 
-    test.simulate(transfer).succeeds().check(KTokenAccount.amount(bob, 2_000n));
+    test.simulate(transfer).checks([KOutcome.success(), KTokenAccount.amount(bob, 2_000n)]);
     expect(test.tokens(bob)).toBe(1_000n);
 
     const protocol: KitFixture<readonly [typeof authority, typeof mint]> = {
@@ -173,7 +176,7 @@ describe("fixture-first test harness", () => {
 
     const outcome = test
       .execute(transfer)
-      .succeeds()
+      .check(WOutcome.success())
       .check(WTokenAccount.amount(alice, 4_000n))
       .check(WTokenAccount.amount(bob, 1_000n))
       .check(WCu.spent(cu => cu <= 20_000n));
@@ -190,11 +193,11 @@ describe("fixture-first test harness", () => {
           data: transferData(10_000n),
         }),
       )
-      .failsWith(1)
-      .check(WTokenAccount.amount(alice, 4_000n))
-      .check(WTokenAccount.amount(bob, 1_000n));
+      .check(WOutcome.error(1));
+    expect(test.tokens(alice)).toBe(4_000n);
+    expect(test.tokens(bob)).toBe(1_000n);
 
-    test.simulate(transfer).succeeds().check(WTokenAccount.amount(bob, 2_000n));
+    test.simulate(transfer).checks([WOutcome.success(), WTokenAccount.amount(bob, 2_000n)]);
     expect(test.tokens(bob)).toBe(1_000n);
 
     const protocol: Web3Fixture<readonly [Address, Address]> = {
@@ -342,7 +345,7 @@ describe("typed account ergonomics", () => {
       decode: (bytes: Uint8Array) => getTokenDecoder().decode(bytes),
     } satisfies KitAccountCodec<{ amount: bigint }>;
 
-    const outcome = test.execute(transfer).succeeds().checks([
+    const outcome = test.execute(transfer).checks([KOutcome.success(), 
       KAccount.owner(alice, address(tokenProgram)),
       KAccount.data(tokenCodec, alice, state => BigInt(state.amount) === 4_000n),
       KAccount.data(tokenCodec, bob, state => BigInt(state.amount) === 1_000n),
@@ -396,8 +399,8 @@ describe("typed account ergonomics", () => {
 
     test
       .execute(transfer)
-      .succeeds()
       .checks([
+        WOutcome.success(),
         WAccount.data(tokenCodec, alice, state => BigInt(state.amount) === 4_000n),
         WAccount.data(tokenCodec, bob, state => BigInt(state.amount) === 1_000n),
       ]);
@@ -507,7 +510,7 @@ describe("typed account ergonomics", () => {
       data: transferData(500n),
     };
 
-    test.execute(transfer).succeeds().check(KTokenAccount.amount(bob, 500n));
+    test.execute(transfer).checks([KOutcome.success(), KTokenAccount.amount(bob, 500n)]);
   });
 
   it("builds co-signer metas and auto-registers missing signers (Web3.js)", async () => {
@@ -543,7 +546,7 @@ describe("typed account ergonomics", () => {
       data: transferData(500n),
     });
 
-    test.execute(transfer).succeeds().check(WTokenAccount.amount(bob, 500n));
+    test.execute(transfer).checks([WOutcome.success(), WTokenAccount.amount(bob, 500n)]);
   });
 });
 
@@ -571,7 +574,7 @@ describe("writable-first account backfill", () => {
     expect(test.simulate(transfer()).isErr()).toBe(true);
 
     await test.add(kitWallet({ address: payer }));
-    test.execute(transfer()).succeeds().check(KAccount.lamports(recipient, amount));
+    test.execute(transfer()).checks([KOutcome.success(), KAccount.lamports(recipient, amount)]);
   });
 
   it("treats a missing writable signer as an empty init target, not a funded payer (Web3.js)", async () => {
@@ -592,7 +595,7 @@ describe("writable-first account backfill", () => {
     expect(test.simulate(transfer()).isErr()).toBe(true);
 
     await test.add(web3Wallet({ address: payer }));
-    test.execute(transfer()).succeeds().check(WAccount.lamports(recipient, amount));
+    test.execute(transfer()).checks([WOutcome.success(), WAccount.lamports(recipient, amount)]);
   });
 
   // A read-only signer (a co-signer, e.g. a multisig member) is an actor and
@@ -615,7 +618,7 @@ describe("writable-first account backfill", () => {
 
     test
       .execute(transfer)
-      .succeeds()
+      .check(KOutcome.success())
       .check(KAccount.lamports(recipient, amount))
       .check(KAccount.lamports(cosigner, DEFAULT_WALLET_LAMPORTS));
   });
@@ -638,7 +641,7 @@ describe("writable-first account backfill", () => {
 
     test
       .execute(transfer)
-      .succeeds()
+      .check(WOutcome.success())
       .check(WAccount.lamports(recipient, amount))
       .check(WAccount.lamports(cosigner, DEFAULT_WALLET_LAMPORTS));
   });
@@ -674,7 +677,7 @@ describe("execution matrix completions", () => {
     const second = kitAddr();
     test
       .simulate([transfer(payer, first), transfer(payer, second)])
-      .succeeds();
+      .check(KOutcome.success());
     expect(test.account(first)).toBeNull();
   });
 
@@ -684,7 +687,7 @@ describe("execution matrix completions", () => {
     const recipient = kitAddr();
     test
       .executeWith([transfer(payer, recipient)], [fundedSystemAccount(payer)])
-      .succeeds()
+      .check(KOutcome.success())
       .check(KAccount.lamports(recipient, amount));
   });
 
@@ -695,7 +698,7 @@ describe("execution matrix completions", () => {
     expect(test.simulate(transfer(payer, recipient)).isErr()).toBe(true);
     test
       .simulateWith(transfer(payer, recipient), [fundedSystemAccount(payer)])
-      .succeeds();
+      .check(KOutcome.success());
     expect(test.account(payer)).toBeNull();
   });
 
@@ -705,7 +708,7 @@ describe("execution matrix completions", () => {
     const recipient = kitAddr();
     test
       .simulateWith([transfer(payer, recipient)], [fundedSystemAccount(payer)])
-      .succeeds();
+      .check(KOutcome.success());
     expect(test.account(payer)).toBeNull();
   });
 
@@ -714,7 +717,7 @@ describe("execution matrix completions", () => {
     const payer = await test.add(kitWallet());
     const recipient = kitAddr();
     test.setComputeUnitLimit(1_000_000n); // ample headroom for a transfer
-    test.execute(transfer(payer, recipient)).succeeds();
+    test.execute(transfer(payer, recipient)).check(KOutcome.success());
     expect(() => test.setComputeUnitLimit(-1n)).toThrow(/u64/);
   });
 
@@ -722,7 +725,7 @@ describe("execution matrix completions", () => {
     using test = new KitTest();
     const payer = await test.add(kitWallet());
     const recipient = kitAddr();
-    const outcome = test.execute(transfer(payer, recipient)).succeeds();
+    const outcome = test.execute(transfer(payer, recipient)).check(KOutcome.success());
     const addresses = outcome.accounts().map(account => account.address);
     expect(addresses).toContain(payer);
     expect(addresses).toContain(recipient);
@@ -754,7 +757,7 @@ describe("determinism", () => {
     getAddressDecoder().decode(new Uint8Array(32).fill(fill)) as KitAddress;
 
   const outcomeSnapshot = (outcome: KitOutcome) => ({
-    error: outcome.error,
+    failure: outcome.failure,
     computeUnits: outcome.computeUnits,
     logs: outcome.logs,
     returnData: outcome.returnData,
@@ -808,9 +811,9 @@ describe("determinism", () => {
 
     // Guard against a degenerate all-empty "determinism": the scenario really
     // did a successful send that changed accounts and a send that failed.
-    expect(first.ok.error).toBeNull();
+    expect(first.ok.failure).toBeNull();
     expect(first.ok.changes.length).toBeGreaterThan(0);
-    expect(first.fail.error).not.toBeNull();
+    expect(first.fail.failure).not.toBeNull();
   });
 });
 
@@ -843,13 +846,13 @@ describe("checks and invariants", () => {
 
     test
       .execute(transfer())
-      .succeeds()
+      .check(KOutcome.success())
       .check(KCu.spent(cu => cu <= 10_000))
       .check(outcome => expect(outcome.isOk()).toBe(true))
       .checks([KCu.spent(cu => cu <= 10_000), KReturnData.is([]), KAccount.data(recipient, []), KAccount.created(recipient)]);
 
     expect(() => test.execute(transfer())).toThrow("cap exceeded");
-    test.simulate(transfer()).succeeds();
+    test.simulate(transfer()).check(KOutcome.success());
   });
 
   it("runs value checks and enforces registered invariants (Web3.js)", async () => {
@@ -873,8 +876,8 @@ describe("checks and invariants", () => {
         data: systemTransferData(amount),
       });
 
-    test.execute(transfer()).succeeds().checks([WCu.spent(cu => cu <= 10_000), WReturnData.is([])]);
+    test.execute(transfer()).checks([WOutcome.success(), WCu.spent(cu => cu <= 10_000), WReturnData.is([])]);
     expect(() => test.execute(transfer())).toThrow("cap exceeded");
-    test.simulate(transfer()).succeeds();
+    test.simulate(transfer()).check(WOutcome.success());
   });
 });

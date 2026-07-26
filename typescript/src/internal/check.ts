@@ -1,10 +1,55 @@
 import {
   decodeAccount,
+  errorsEqual,
   type AccountCodec,
   type Check,
   type Outcome,
   type OutcomeAdapter,
+  type ProgramError,
 } from "./outcome.js";
+
+/**
+ * The verdict facts, mirroring Rust's `Outcome::success()`/`Outcome::error()`.
+ * Shells re-export this as the value `Outcome`, alongside the outcome type.
+ */
+export const OutcomeFacts = {
+  /** Assert the transaction succeeded. Optional before other facts — they
+   * self-diagnose on a failed transaction — and useful to state intent. */
+  success<Address, Account>(): Check<Address, Account> {
+    return tx => {
+      if (tx.failure !== null) {
+        throw new Error(
+          `expected success, got ${JSON.stringify(tx.failure)}${tx.diagnostics()}`,
+        );
+      }
+    };
+  },
+  /** Assert the transaction failed with exactly this error: a custom code, or
+   * a full `ProgramError`. */
+  error<Address, Account>(
+    expected: number | ProgramError,
+  ): Check<Address, Account> {
+    const wanted: ProgramError =
+      typeof expected === "number" ? { type: "Custom", code: expected } : expected;
+    return tx => {
+      if (tx.failure === null || !errorsEqual(tx.failure, wanted)) {
+        throw new Error(
+          `expected error ${JSON.stringify(wanted)}, got ${JSON.stringify(tx.failure)}${tx.diagnostics()}`,
+        );
+      }
+    };
+  },
+};
+
+/** Facts self-diagnose: evaluated against a failed transaction they throw with
+ * the transaction's error and logs rather than silently judging pre-state. */
+function live<Address, Account>(tx: Outcome<Address, Account>): void {
+  if (tx.failure !== null) {
+    throw new Error(
+      `fact checked against a failed transaction: ${JSON.stringify(tx.failure)}${tx.diagnostics()}`,
+    );
+  }
+}
 
 /**
  * Convert several checks into one check. A bundle is itself a `Check`, so
@@ -111,6 +156,7 @@ export function createChecks<Address, Account>(
   type O = Outcome<Address, Account>;
 
   const requiredAccount = (tx: O, address: Address): Account => {
+    live(tx);
     const account = tx.account(address);
     if (account === null) {
       throw new Error(
@@ -121,6 +167,7 @@ export function createChecks<Address, Account>(
   };
 
   const requiredChange = (tx: O, address: Address) => {
+    live(tx);
     const key = adapter.addressKey(address);
     const change = tx.accountChanges.find(
       candidate => adapter.addressKey(candidate.address) === key,
@@ -140,6 +187,7 @@ export function createChecks<Address, Account>(
     (label: string, read: (tx: O) => bigint) =>
     (expected: ExpectedValue<bigint | number>): C =>
     tx => {
+      live(tx);
       const actual = read(tx);
       if (typeof expected === "function") {
         if (!expected(actual)) {
@@ -154,6 +202,7 @@ export function createChecks<Address, Account>(
     (label: string, read: (tx: O) => Uint8Array) =>
     (expected: ExpectedBytes): C =>
     tx => {
+      live(tx);
       const actual = read(tx);
       if (typeof expected === "function") {
         if (!expected(actual)) {
@@ -242,6 +291,7 @@ export function createChecks<Address, Account>(
         }
       },
       closed: address => tx => {
+        live(tx);
         const account = tx.account(address);
         if (account !== null && !adapter.isClosed(account)) {
           throw new Error(

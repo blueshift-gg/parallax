@@ -13,24 +13,24 @@ and Rust harnesses.
 
 ## Opening a world
 
-`Test.open(programId, programPath?, options?)` resolves the artifact through a
+`Ctx.open(programId, programPath?, options?)` resolves the artifact through a
 discovery chain mirroring Rust's `setup.rs`: an explicit `programPath` wins;
 otherwise `PARALLAX_PROGRAM_PATH` (the same variable a test runner sets to a
 freshly built program); failing both, an actionable error. The constructor
-`new Test(programId?, elf?, options?)` takes in-memory ELF directly, and
-`new Test()` with no program builds a world with only the runtime built-ins.
+`new Ctx(programId?, elf?, options?)` takes in-memory ELF directly, and
+`new Ctx()` with no program builds a world with only the runtime built-ins.
 
-`TestOptions` is `{ computeUnitLimit?: bigint; rpc?: string }` — the
+`CtxOptions` is `{ computeUnitLimit?: bigint; rpc?: string }` — the
 per-transaction CU ceiling and the endpoint `dump` fixtures fetch from (code-only,
 defaulting to public mainnet-beta; no environment override). `setComputeUnitLimit`
 reconfigures the ceiling on an already-built world.
 
-A `Test` owns a native handle. Use `using` for automatic disposal (or call
+A `Ctx` owns a native handle. Use `using` for automatic disposal (or call
 `free()` / `test[Symbol.dispose]()`), so the kernel is released deterministically.
 
 ## Fixtures
 
-`test.add(fixture)` installs a fixture and returns the address(es) it placed; it
+`ctx.add(fixture)` installs a fixture and returns the address(es) it placed; it
 is the only composition primitive, and accepts an array of fixtures too. Built-in
 factories:
 
@@ -39,11 +39,11 @@ import {
   wallet, mint, tokenAccount, associatedTokenAccount, account, program,
 } from "parallax-svm/kit";
 
-const authority = await test.add(wallet());                         // funded actor
-const poor = await test.add(wallet({ fund: 0n }));                  // exact balance
-const pinned = await test.add(wallet({ address: SOME_ADDRESS }));   // specific address
+const authority = await ctx.add(wallet());                         // funded actor
+const poor = await ctx.add(wallet({ fund: 0n }));                  // exact balance
+const pinned = await ctx.add(wallet({ address: SOME_ADDRESS }));   // specific address
 
-const m = await test.add(
+const m = await ctx.add(
   mint({
     authority,                       // omit → fixed-supply
     freezeAuthority: authority,
@@ -54,10 +54,10 @@ const m = await test.add(
   }),
 );
 
-const vault = await test.add(tokenAccount(m, authority, { amount: 600n }));
-const ata = await test.add(associatedTokenAccount(m, authority, { amount: 400n }));
-const raw = await test.add(account({ address, owner, lamports: 1n, data }));
-await test.add(program(CPI_PROGRAM_ID, elf));   // preload ELF for CPI
+const vault = await ctx.add(tokenAccount(m, authority, { amount: 600n }));
+const ata = await ctx.add(associatedTokenAccount(m, authority, { amount: 400n }));
+const raw = await ctx.add(account({ address, owner, lamports: 1n, data }));
+await ctx.add(program(CPI_PROGRAM_ID, elf));   // preload ELF for CPI
 ```
 
 Constructors take only what is conceptually required (`tokenAccount(mint, owner)`,
@@ -69,10 +69,10 @@ Installing several of a fixture is an option-bag plural that returns `Address[]`
 mirroring the Rust `accounts` vocabulary:
 
 ```ts
-const [a, b] = await test.add(wallet({ accounts: [ADDR_A, ADDR_B], fund: 5_000n })); // pinned
-const [w1, w2, w3] = await test.add(wallet({ count: 3, fund: 7n }));                 // fresh
-const [m1, m2] = await test.add(mint({ count: 2, supply: 1_000n }));                 // fresh
-const [t1, t2] = await test.add(tokenAccount(m, owner, { accounts: [T1, T2] }));     // pinned
+const [a, b] = await ctx.add(wallet({ accounts: [ADDR_A, ADDR_B], fund: 5_000n })); // pinned
+const [w1, w2, w3] = await ctx.add(wallet({ count: 3, fund: 7n }));                 // fresh
+const [m1, m2] = await ctx.add(mint({ count: 2, supply: 1_000n }));                 // fresh
+const [t1, t2] = await ctx.add(tokenAccount(m, owner, { accounts: [T1, T2] }));     // pinned
 ```
 
 `wallet` and `tokenAccount` offer both the pinned (`accounts`) and fresh (`count`)
@@ -92,13 +92,13 @@ mechanics.
 ```ts
 import { dump, load } from "parallax-svm/kit";
 
-const [pool, oracle] = await test.add(dump({ accounts: [POOL, ORACLE] }));
-await test.add(dump.program(AMM_PROGRAM));            // program + programdata, coherently
-await test.add(dump({ accounts: [POOL], syncClock: true }));  // adopt the dumped slot's clock
-await test.add(dump.refreshAll());                   // re-fetch every stored entry at one slot
+const [pool, oracle] = await ctx.add(dump({ accounts: [POOL, ORACLE] }));
+await ctx.add(dump.program(AMM_PROGRAM));            // program + programdata, coherently
+await ctx.add(dump({ accounts: [POOL], syncClock: true }));  // adopt the dumped slot's clock
+await ctx.add(dump.refreshAll());                   // re-fetch every stored entry at one slot
 
-const accounts = await test.add(load({ path: "fixtures/pool.dump" })); // Address[]
-await test.add(load.program("fixtures/amm.dump"));                     // Address
+const accounts = await ctx.add(load({ path: "fixtures/pool.dump" })); // Address[]
+await ctx.add(load.program("fixtures/amm.dump"));                     // Address
 ```
 
 Any `.parallax/` file is a shareable dump artifact `load` reads by path.
@@ -112,18 +112,21 @@ transaction-input accounts. Every execution returns an `Outcome`:
 Assertions throw with actionable messages and chain (`return this`); reads return
 plain values or `null`:
 
-`succeeds()` yields the transaction witness checks run against, mirroring
-Rust. Every fact takes its subject and one expectation — a plain value means
-equality, a function is a predicate:
+Verdicts are checks, mirroring Rust — `Outcome.success()` and
+`Outcome.error(code | ProgramError)` — and facts self-diagnose on failed
+transactions. Every fact takes its subject and one expectation: a plain value
+means equality, a function is a predicate:
 
 ```ts
-import { Account, bundle, Cu, Mint, TokenAccount } from "parallax-svm/kit";
+import { Account, bundle, Cu, Mint, Outcome, TokenAccount } from "parallax-svm/kit";
 
-test.execute(withdraw).succeeds().checks([
+ctx.execute(withdraw).checks([
+    Outcome::success(),
+    
   Cu.spent(cu => cu <= 20_000n),
   Account.lamports(recipient, 1_000_000n),
   Account.lamports(user, x => x > 0n),
-  Account.owner(vault, test.programId),
+  Account.owner(vault, ctx.programId),
   Account.data(VaultCodec, vault, v => v.amount === 600n),  // decoded via codec
   Account.data(config, [1, 0, 0, 0]),                       // raw bytes
   Account.created(vault),
@@ -133,20 +136,21 @@ test.execute(withdraw).succeeds().checks([
 ```
 
 A check is simply a function of the witness; `bundle([..])` groups checks into
-one, and any `(tx) => void` closure is a custom check. `fails(..)` /
-`failsWith(..)` yield a failed-transaction witness with reads only.
+one, and any `(tx) => void` closure is a custom check. On failure the outcome
+keeps its reads (`failure`, logs, compute units); unchanged world state is
+asserted with `ctx` reads, not facts.
 
 ### Bundles and invariants
 
-`test.invariant(..)` registers any check — fact, bundle, or closure — to run
+`ctx.invariant(..)` registers any check — fact, bundle, or closure — to run
 after every *successful* committed execution (failed sends and simulations never
 run invariants):
 
 ```ts
 const solvent = Account.data(PoolCodec, pool, p => p.reserves >= p.obligations);
 
-test.invariant(solvent);                       // every send now enforces it
-test.execute(swap).succeeds().check(tx => assert.equal(tx.logs.length, 3));
+ctx.invariant(solvent);                       // every send now enforces it
+ctx.execute(swap).check(Outcome::success()).check(tx => assert.equal(tx.logs.length, 3));
 ```
 
 An invariant sees each send's witness, so the accounts it judges must be part
@@ -172,8 +176,8 @@ interface AccountCodec<Value, Address> {
   size?: number;                          // minimum raw length
 }
 
-const vaultState = test.read(VaultCodec, vault);   // codec first, then address
-test.write(VaultCodec, vault, { authority, amount: 1_000n });
+const vaultState = ctx.read(VaultCodec, vault);   // codec first, then address
+ctx.write(VaultCodec, vault, { authority, amount: 1_000n });
 ```
 
 `read`, `write`, and the typed `Account.data` checks validate `owner`, `discriminator`, and

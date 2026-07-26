@@ -1,6 +1,6 @@
 //! Parallax: a fixture-based testing harness for Solana programs on LiteSVM.
 //!
-//! [`parallax_test`] turns an ordinary Rust test into an isolated [`Test`]
+//! [`parallax_test`] turns an ordinary Rust test into an isolated [`Ctx`]
 //! world loaded with the current program. [`fixture`] provides composable
 //! account setup, while [`Outcome`] keeps execution assertions structured and
 //! independent of the SVM that ran the transaction. Typed account state is
@@ -11,9 +11,10 @@
 //! use parallax_svm::prelude::*;
 //!
 //! #[parallax_test]
-//! fn initializes(test: &mut Test) {
+//! fn initializes(test: &mut Ctx) {
 //!     let authority = test.add(Wallet::account());
-//!     test.execute(InitializeInstruction { authority }).succeeds();
+//!     ctx.execute(InitializeInstruction { authority })
+//!         .check(Outcome::success());
 //! }
 //! ```
 //!
@@ -29,7 +30,7 @@
 //! # Determinism
 //!
 //! Execution is deterministic and is treated as a guarantee, not an accident:
-//! two fresh [`Test`] worlds running the identical scenario produce
+//! two fresh [`Ctx`] worlds running the identical scenario produce
 //! byte-identical results — the same [`Outcome`] (error, compute units, logs,
 //! return data, account changes) and the same post-state account bytes. The
 //! backend seeds a fixed genesis blockhash and a zero-timestamp clock (no
@@ -57,16 +58,19 @@ mod world;
 pub use dump::DumpPlan;
 
 pub use {
-    check::{bundle, CheckFn, Cu, DataExpected, Expected, ExpectedBytes, Raw, ReturnData, Typed},
-    outcome::{FailedTransaction, Outcome, SucceededTransaction},
+    check::{
+        bundle, CheckFn, Cu, DataExpected, Expected, ExpectedBytes, IntoTransactionError, Raw,
+        ReturnData, Typed,
+    },
+    outcome::Outcome,
     parallax_svm_derive::parallax_test,
-    setup::{SetupError, TestBuilder, PROGRAM_PATH_ENV},
+    setup::{CtxBuilder, SetupError, PROGRAM_PATH_ENV},
     solana_instruction::{AccountMeta, Instruction},
     solana_pubkey::Pubkey,
     solana_sdk_ids::system_program,
     types::{Account, AccountChange, ProgramError},
+    world::{Ctx, Snapshot, DEFAULT_WALLET_LAMPORTS},
     world::{IntoInstructions, Many, One},
-    world::{Snapshot, Test, DEFAULT_WALLET_LAMPORTS},
 };
 
 /// The SPL Token program.
@@ -85,7 +89,7 @@ pub const SPL_ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
 ///
 /// Each address becomes an [`AccountMeta`] that is read-only and a signer, the
 /// shape a program expects for an authority it only needs to have signed.
-/// [`Test::execute`] auto-registers any co-signer the world has not installed as a
+/// [`Ctx::execute`] auto-registers any co-signer the world has not installed as a
 /// funded system account — as it does for every signer it backfills — so tests
 /// pass the addresses alone without hand-rolling metas or wallets.
 pub fn co_signers(addresses: &[Pubkey]) -> Vec<AccountMeta> {
@@ -103,10 +107,9 @@ pub mod prelude {
             AssociatedTokenAccount, Dump, Fixture, Load, Mint, Program, TokenAccount, TokenProgram,
             Wallet,
         },
-        parallax_test, system_program, Account, AccountChange, AccountMeta, CheckFn, Cu,
-        FailedTransaction, Instruction, Outcome, ProgramError, Pubkey, ReturnData, Snapshot,
-        SucceededTransaction, Test, DEFAULT_WALLET_LAMPORTS, SPL_ASSOCIATED_TOKEN_PROGRAM_ID,
-        SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
+        parallax_test, system_program, Account, AccountChange, AccountMeta, CheckFn, Ctx, Cu,
+        Instruction, Outcome, ProgramError, Pubkey, ReturnData, Snapshot, DEFAULT_WALLET_LAMPORTS,
+        SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
     };
 }
 
@@ -118,8 +121,8 @@ mod tests {
             co_signers,
             fixture::{AssociatedTokenAccount, Fixture, Mint, TokenAccount, TokenProgram, Wallet},
             setup::resolve_program_path_from_named,
-            system_program, Account, AccountMeta, CheckFn, Instruction, ProgramError, Pubkey,
-            SetupError, Test, DEFAULT_WALLET_LAMPORTS, SPL_TOKEN_2022_PROGRAM_ID,
+            system_program, Account, AccountMeta, CheckFn, Ctx, Instruction, Outcome, ProgramError,
+            Pubkey, SetupError, DEFAULT_WALLET_LAMPORTS, SPL_TOKEN_2022_PROGRAM_ID,
         },
         spl_token::solana_program::program_option::COption,
         std::{fs, path::PathBuf},
@@ -144,8 +147,8 @@ mod tests {
         ))
     }
 
-    fn empty_test() -> Test {
-        Test::from_parts(
+    fn empty_test() -> Ctx {
+        Ctx::from_parts(
             Backend::new(),
             Pubkey::new_from_array([42; 32]),
             PathBuf::new(),
@@ -300,7 +303,7 @@ mod tests {
         impl Fixture for ProtocolFixture {
             type Output = (Pubkey, Pubkey);
 
-            fn install(self, test: &mut Test) -> Self::Output {
+            fn install(self, test: &mut Ctx) -> Self::Output {
                 let authority = test.add(Wallet::account());
                 let state = Pubkey::new_from_array([200; 32]);
                 test.add(Account::new(state, test.program_id(), 1, vec![1, 2, 3]));
@@ -541,8 +544,8 @@ mod tests {
         // Installed as a wallet, the same transfer goes through.
         test.add(Wallet::account().at(payer));
         test.execute(system_transfer(payer, recipient, amount))
-            .succeeds()
             .checks([
+                Outcome::success(),
                 Account::lamports(recipient, amount),
                 Account::lamports(payer, |lamports| lamports > 0),
                 Account::created(recipient),
@@ -572,7 +575,7 @@ mod tests {
             Vec::new(),
         );
         test.simulate_with(system_transfer(payer, recipient, amount), [funded])
-            .succeeds();
+            .check(Outcome::success());
 
         // Simulation commits nothing, so the seeded payer never enters the world.
         assert!(test.account(payer).is_none());
@@ -594,9 +597,10 @@ mod tests {
             .accounts
             .push(AccountMeta::new_readonly(cosigner, true));
 
-        test.execute(transfer)
-            .succeeds()
-            .check(Account::lamports(cosigner, DEFAULT_WALLET_LAMPORTS));
+        test.execute(transfer).checks([
+            Outcome::success(),
+            Account::lamports(cosigner, DEFAULT_WALLET_LAMPORTS),
+        ]);
     }
 
     /// A named protocol invariant: `account` never holds more than `max`
@@ -627,7 +631,7 @@ mod tests {
         test.invariant(capped(recipient, 1_500_000_000));
 
         test.execute(system_transfer(payer, recipient, 1_000_000_000))
-            .succeeds();
+            .check(Outcome::success());
         // The invariant panics inside this send, before its outcome exists.
         let _ = test.execute(system_transfer(payer, recipient, 1_000_000_000));
     }
@@ -643,7 +647,7 @@ mod tests {
         test.invariant(capped(recipient, 1));
 
         test.simulate(system_transfer(payer, recipient, 1_000_000_000))
-            .succeeds();
+            .check(Outcome::success());
     }
 
     // The composition algebra: tuples install heterogeneous worlds in order,
@@ -660,7 +664,7 @@ mod tests {
         assert_ne!(maker, taker);
         assert_eq!(test.supply(mint), 1_000);
 
-        let world = test.add(|t: &mut Test| {
+        let world = test.add(|t: &mut Ctx| {
             let holder = t.add(Wallet::account().holding(mint, 400));
             t.invariant(CheckFn::new(move |tx| {
                 if let Some(account) = tx.account(holder) {
@@ -671,6 +675,33 @@ mod tests {
         });
         assert_eq!(test.tokens(world.1), 400);
         assert_eq!(test.lamports(world.0), DEFAULT_WALLET_LAMPORTS);
+    }
+
+    // Verdicts are checks: Outcome::error compares a ProgramError or a typed
+    // code, and facts self-diagnose — one evaluated against a failed
+    // transaction panics leading with the real error rather than silently
+    // judging pre-state.
+    #[test]
+    fn verdict_facts_compare_errors() {
+        let mut test = empty_test();
+        let payer = Pubkey::new_from_array([1; 32]);
+        let recipient = Pubkey::new_from_array([2; 32]);
+
+        test.execute(system_transfer(payer, recipient, 5))
+            .check(Outcome::error(ProgramError::Runtime(
+                "AccountNotFound".into(),
+            )));
+    }
+
+    #[test]
+    #[should_panic(expected = "fact checked against a failed transaction")]
+    fn facts_self_diagnose_on_failed_transactions() {
+        let mut test = empty_test();
+        let payer = Pubkey::new_from_array([1; 32]);
+        let recipient = Pubkey::new_from_array([2; 32]);
+
+        let outcome = test.execute(system_transfer(payer, recipient, 5));
+        outcome.check(Account::lamports(recipient, 5));
     }
 
     // Micro-benchmarks for the harness hot paths. These are `#[ignore]` so they

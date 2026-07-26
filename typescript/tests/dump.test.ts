@@ -9,7 +9,7 @@ import {
   type Address,
   type Instruction,
 } from "@solana/kit";
-import { Test as KitTest, dump, load } from "../src/kit.js";
+import { Ctx as KitTest, dump, load, Outcome as KOutcome } from "../src/kit.js";
 
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
@@ -241,8 +241,8 @@ describe("dump fixture", () => {
         };
         const outcome = test.execute(failing);
         expect(outcome.isErr()).toBe(true);
-        expect(() => outcome.succeeds()).toThrow(/missing account/);
-        expect(() => outcome.succeeds()).toThrow(/dump accounts fixture/);
+        expect(() => outcome.check(KOutcome.success())).toThrow(/missing account/);
+        expect(() => outcome.check(KOutcome.success())).toThrow(/dump accounts fixture/);
       } finally {
         test.free();
       }

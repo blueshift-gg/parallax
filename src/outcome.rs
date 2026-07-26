@@ -16,7 +16,7 @@ pub(crate) struct TrackedAccount {
 /// `Outcome` owns the stable data tests normally need: the program error,
 /// logs, return data, compute units, resulting accounts, and writable account
 /// changes. The runtime's internal result type is intentionally private.
-#[must_use = "assert the outcome with succeeds, fails, or fails_with"]
+#[must_use = "check the outcome, e.g. .check(Outcome::success())"]
 pub struct Outcome {
     error: Option<ProgramError>,
     compute_units: u64,
@@ -93,8 +93,9 @@ impl Outcome {
         self.error.is_some()
     }
 
-    /// The execution error, if any.
-    pub fn error(&self) -> Option<&ProgramError> {
+    /// The execution error, if any. (The verdict *fact* is
+    /// [`Outcome::error`] taking an expectation — this is the raw read.)
+    pub fn failure(&self) -> Option<&ProgramError> {
         self.error.as_ref()
     }
 
@@ -161,58 +162,13 @@ impl Outcome {
             .collect()
     }
 
-    /// Assert success, yielding the [`SucceededTransaction`] witness that
-    /// checks run against. Writing an account check on a failed transaction is
-    /// therefore a type error, not a runtime surprise.
-    pub fn succeeds(self) -> SucceededTransaction {
-        if let Some(error) = &self.error {
-            panic!("expected success, got {error}{}", self.formatted_logs());
-        }
-        SucceededTransaction(self)
-    }
-
-    /// Assert a typed custom program error, yielding the failed-transaction
-    /// witness for follow-up reads.
-    pub fn fails_with<E>(self, expected: E) -> FailedTransaction
-    where
-        E: Into<u32>,
-    {
-        self.fails(ProgramError::Custom(expected.into()))
-    }
-
-    /// Assert a runtime or non-custom program error, yielding the
-    /// failed-transaction witness for follow-up reads.
-    pub fn fails(self, expected: ProgramError) -> FailedTransaction {
-        assert_eq!(
-            self.error.as_ref(),
-            Some(&expected),
-            "unexpected execution outcome{}",
-            self.formatted_logs()
-        );
-        FailedTransaction(self)
-    }
-
-    fn formatted_logs(&self) -> String {
-        let mut formatted = if self.logs.is_empty() {
-            String::new()
-        } else {
-            format!("\nprogram logs:\n  {}", self.logs.join("\n  "))
-        };
-        if let Some(hint) = &self.hint {
-            formatted.push_str("\nhint: ");
-            formatted.push_str(hint);
-        }
-        formatted
-    }
-}
-
-/// A transaction proven successful by [`Outcome::succeeds`] — the context
-/// every [`CheckFn`](crate::CheckFn) runs against. All outcome reads are
-/// available through deref.
-pub struct SucceededTransaction(pub(crate) Outcome);
-
-impl SucceededTransaction {
     /// Run one check or one [`bundle`](crate::bundle). Chainable.
+    ///
+    /// Facts self-diagnose: any account or transaction fact running against a
+    /// failed transaction panics leading with the transaction's error and
+    /// logs, so an unstated [`Outcome::success`] still fails loudly with the
+    /// real cause. Verdicts are checks too: [`Outcome::success`] and
+    /// [`Outcome::error`].
     pub fn check(&self, check: crate::CheckFn) -> &Self {
         check.run(self);
         self
@@ -225,27 +181,18 @@ impl SucceededTransaction {
         }
         self
     }
-}
 
-impl core::ops::Deref for SucceededTransaction {
-    type Target = Outcome;
-
-    fn deref(&self) -> &Outcome {
-        &self.0
-    }
-}
-
-/// A transaction proven failed by [`Outcome::fails`] /
-/// [`Outcome::fails_with`]. A failed transaction commits nothing, so only the
-/// outcome reads (logs, error, compute units, changes) are available — checks
-/// are deliberately not.
-pub struct FailedTransaction(pub(crate) Outcome);
-
-impl core::ops::Deref for FailedTransaction {
-    type Target = Outcome;
-
-    fn deref(&self) -> &Outcome {
-        &self.0
+    pub(crate) fn formatted_logs(&self) -> String {
+        let mut formatted = if self.logs.is_empty() {
+            String::new()
+        } else {
+            format!("\nprogram logs:\n  {}", self.logs.join("\n  "))
+        };
+        if let Some(hint) = &self.hint {
+            formatted.push_str("\nhint: ");
+            formatted.push_str(hint);
+        }
+        formatted
     }
 }
 
@@ -294,8 +241,8 @@ mod tests {
         }
     }
 
-    fn succeeded(compute_units: u64) -> SucceededTransaction {
-        outcome(&[], compute_units).succeeds()
+    fn succeeded(compute_units: u64) -> Outcome {
+        outcome(&[], compute_units)
     }
 
     #[test]
@@ -330,6 +277,25 @@ mod tests {
             bundle([Cu::spent(|cu| cu > 0), Cu::spent(|cu| cu < 11)]),
             CheckFn::new(|tx| assert_eq!(tx.compute_units(), 10)),
         ]);
+    }
+
+    // Outcome::error takes a ProgramError or anything Into<u32> (a program's
+    // typed error), unifying the old fails/fails_with split.
+    #[test]
+    fn error_fact_accepts_both_input_shapes() {
+        let mut failed = outcome(&[], 0);
+        failed.error = Some(ProgramError::Custom(6001));
+        failed
+            .check(crate::Outcome::error(6001u32))
+            .check(crate::Outcome::error(ProgramError::Custom(6001)));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected success")]
+    fn success_fact_rejects_failures() {
+        let mut failed = outcome(&[], 0);
+        failed.error = Some(ProgramError::Custom(1));
+        failed.check(crate::Outcome::success());
     }
 
     #[test]
@@ -384,8 +350,7 @@ mod tests {
             address,
             owner,
             &Counter { count: 7, tag: 3 },
-        ))
-        .succeeds();
+        ));
 
         tx.checks([
             Account::lamports(address, 42),
@@ -402,7 +367,7 @@ mod tests {
     fn raw_data_expectations_compare_bytes() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
-        let tx = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3])).succeeds();
+        let tx = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
 
         tx.check(Account::data(address, [1, 2, 3]));
     }
@@ -412,7 +377,7 @@ mod tests {
     fn raw_data_expectations_print_both_sides() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
-        let tx = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3])).succeeds();
+        let tx = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
 
         tx.check(Account::data(address, [1, 2]));
     }
@@ -423,7 +388,7 @@ mod tests {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
         // Too few bytes for a Counter (needs nine), so the wincode decode fails.
-        let tx = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3])).succeeds();
+        let tx = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
 
         tx.check(Account::data(address, |_: &Counter| {
             unreachable!("the decode fails before the predicate runs")
@@ -440,8 +405,7 @@ mod tests {
             address,
             owner,
             &Counter { count: 1, tag: 0 },
-        ))
-        .succeeds();
+        ));
 
         tx.check(Account::owner(address, foreign));
     }
@@ -461,7 +425,7 @@ mod tests {
         let mut outcome = state_outcome(created.clone());
         outcome.changes = vec![crate::AccountChange::new(address, None, Some(created))];
 
-        outcome.succeeds().check(Account::created(address));
+        outcome.check(Account::created(address));
     }
 
     #[test]

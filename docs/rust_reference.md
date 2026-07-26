@@ -15,43 +15,43 @@ use parallax_svm::prelude::*;
 ## Opening a world
 
 `#[parallax_test]` expands to a plain `#[test]` that loads the current crate's
-compiled program into an isolated `Test` world. Filters, `#[ignore]`,
+compiled program into an isolated `Ctx` world. Filters, `#[ignore]`,
 `#[should_panic]`, and `Result<(), E>` returns all work normally. The program id
 defaults to `crate::ID`; a test for another program uses
 `#[parallax_test(program_id = EXPR)]`. The artifact is discovered under an
 ancestor `target/deploy` (preferring `{crate}.so` in a multi-program workspace),
 or taken from `PARALLAX_PROGRAM_PATH` when a test runner sets it.
 
-Drop to `Test::builder(id)` when a test needs to configure the world by hand:
+Drop to `Ctx::builder(id)` when a test needs to configure the world by hand:
 
 ```rust,ignore
-let mut test = Test::builder(MY_PROGRAM_ID)
+let mut test = Ctx::builder(MY_PROGRAM_ID)
     .compute_unit_limit(200_000)   // per-transaction CU ceiling
     .rpc("https://my-rpc.example") // endpoint Dump fixtures fetch from
-    .build()                       // -> Result<Test, SetupError>
+    .build()                       // -> Result<Ctx, SetupError>
     .unwrap();
 ```
 
 `builder` also takes `.program_path(p)` / `.crate_name(n)` to steer discovery,
 `.program_bytes(elf)` to load an in-memory artifact, and `.no_program()` for a
 world with only the runtime built-ins (System, Token, Token-2022, ATA).
-`Test::new(id)` is `builder(id).build()` unwrapped; `Test::try_new(id)` returns
+`Ctx::new(id)` is `builder(id).build()` unwrapped; `Ctx::try_new(id)` returns
 the `Result`. `set_compute_unit_limit(limit)` reconfigures the ceiling on an
 already-built world.
 
 ## Fixtures are values
 
 Setup is data, not a DSL. A fixture is any value implementing `Fixture`, and
-`test.add` is the only composition primitive — it installs the fixture and
+`ctx.add` is the only composition primitive — it installs the fixture and
 returns the address(es) it placed, so tests thread handles back instead of
 pinning addresses up front.
 
 ```rust,ignore
-let authority = test.add(Wallet::account());             // funded actor, fresh address
-let poor = test.add(Wallet::account().fund(0));           // exact balance
-let pinned = test.add(Wallet::account().at(SOME_KEY));    // specific address
+let authority = ctx.add(Wallet::account());             // funded actor, fresh address
+let poor = ctx.add(Wallet::account().fund(0));           // exact balance
+let pinned = ctx.add(Wallet::account().at(SOME_KEY));    // specific address
 
-let mint = test.add(
+let mint = ctx.add(
     Mint::account()                                   // fixed-supply, 6-decimal legacy mint
         .with_authority(authority)                    // ...now mintable
         .with_freeze_authority(authority)
@@ -61,8 +61,8 @@ let mint = test.add(
         .with_holder([(alice, 400), (bob, 600)]),     // one ATA per holder, funded
 );
 
-let vault = test.add(TokenAccount::account(mint, authority).with_amount(600));
-let ata = test.add(AssociatedTokenAccount::account(mint, authority).with_amount(400));
+let vault = ctx.add(TokenAccount::account(mint, authority).with_amount(600));
+let ata = ctx.add(AssociatedTokenAccount::account(mint, authority).with_amount(400));
 ```
 
 The built-ins are `Wallet`, `Mint`, `TokenAccount`, `AssociatedTokenAccount`,
@@ -75,20 +75,20 @@ optional is a builder method.
 
 ### The `accounts` plural vocabulary
 
-Installing several of one fixture reads as a plural, and `test.add` destructures
+Installing several of one fixture reads as a plural, and `ctx.add` destructures
 the fixed-arity result:
 
 ```rust,ignore
 // Fresh Copy fixtures: array-repeat already works.
-let [alice, bob, carol] = test.add([Wallet::account().fund(7); 3]);
+let [alice, bob, carol] = ctx.add([Wallet::account().fund(7); 3]);
 
 // Pinned plural — the addresses lead, one config applied at each (mirrors Dump::accounts):
-let [a, b] = test.add(Wallet::accounts([ADDR_A, ADDR_B]).fund(5_000));
-let [ta, tb] = test.add(TokenAccount::accounts([TA, TB], mint, owner).with_amount(42));
+let [a, b] = ctx.add(Wallet::accounts([ADDR_A, ADDR_B]).fund(5_000));
+let [ta, tb] = ctx.add(TokenAccount::accounts([TA, TB], mint, owner).with_amount(42));
 
 // Fresh plural — N distinct mints sharing one config. N is inferred from the
 // destructuring pattern, so no count is ever written:
-let [m1, m2] = test.add(Mint::accounts().with_supply(1_000));
+let [m1, m2] = ctx.add(Mint::accounts().with_supply(1_000));
 ```
 
 `Wallet`/`TokenAccount` are `Copy`, so their *fresh* plural is just
@@ -101,8 +101,8 @@ is exactly `Mint::with_holder`'s job.
 ### Composition: tuples, holdings, closure worlds
 
 ```rust,ignore
-let [mint_a, mint_b] = test.add(Mint::accounts());
-let (maker, taker) = test.add((
+let [mint_a, mint_b] = ctx.add(Mint::accounts());
+let (maker, taker) = ctx.add((
     Wallet::account().holding(mint_a, 1_000_000_000),
     Wallet::account().holding(mint_b, 1_000_000_000),
 ));
@@ -111,8 +111,8 @@ let (maker, taker) = test.add((
 Tuples install heterogeneous fixtures in order and destructure their handles;
 `holding` installs a funded associated token account inside the actor — the
 actor-centric dual of `with_holder`. Closures are fixtures too: a world is a
-plain function receiving `&mut Test`, and because it can call
-`test.invariant(..)` while it builds, `test.add(escrow_world(1_000))` yields a
+plain function receiving `&mut Ctx`, and because it can call
+`ctx.invariant(..)` while it builds, `ctx.add(escrow_world(1_000))` yields a
 **self-verifying world** — names, state, and standing laws in one value.
 
 ### Application fixtures
@@ -126,16 +126,16 @@ struct FundedVault { deposit: u64 }
 impl Fixture for FundedVault {
     type Output = (Pubkey, Pubkey); // (authority, vault)
 
-    fn install(self, test: &mut Test) -> Self::Output {
-        let program = test.program_id();
-        let authority = test.add(Wallet::account());
-        let vault = test.derive_pda(&[b"vault".as_ref(), authority.as_ref()]);
-        test.write(vault, program, VaultState { authority, amount: self.deposit });
+    fn install(self, test: &mut Ctx) -> Self::Output {
+        let program = ctx.program_id();
+        let authority = ctx.add(Wallet::account());
+        let vault = ctx.derive_pda(&[b"vault".as_ref(), authority.as_ref()]);
+        ctx.write(vault, program, VaultState { authority, amount: self.deposit });
         (authority, vault)
     }
 }
 
-let (authority, vault) = test.add(FundedVault { deposit: 1_000 });
+let (authority, vault) = ctx.add(FundedVault { deposit: 1_000 });
 ```
 
 ## Dump & load real state
@@ -149,12 +149,12 @@ and deterministic.
 
 ```rust,ignore
 #[parallax_test]
-fn swaps_against_a_real_pool(test: &mut Test) {
+fn swaps_against_a_real_pool(ctx: &mut Ctx) {
     // Fetched once, at one slot, then served from `.parallax/` offline.
-    let [pool, oracle] = test.add(Dump::accounts([POOL, ORACLE]));
-    test.add(Dump::program(AMM_PROGRAM));
+    let [pool, oracle] = ctx.add(Dump::accounts([POOL, ORACLE]));
+    ctx.add(Dump::program(AMM_PROGRAM));
 
-    test.execute(SwapInstruction { pool, oracle }).succeeds();
+    ctx.execute(SwapInstruction { pool, oracle }).check(Outcome::success());
 }
 ```
 
@@ -162,7 +162,7 @@ fn swaps_against_a_real_pool(test: &mut Test) {
   same addresses in the same arity. On a warm store, resolution is a pure disk
   read — no socket opens. On a miss, the misses are resolved in **one batched
   `getMultipleAccounts`** at **one slot**, written to the store, and the run goes
-  green. The RPC endpoint comes from `Test::builder(id).rpc(url)` and defaults to
+  green. The RPC endpoint comes from `Ctx::builder(id).rpc(url)` and defaults to
   public mainnet-beta — code-only, with no environment override.
 - **Programs dump coherently.** `Dump::program(id)` fetches the executable
   account and, for the upgradeable loader, its programdata in the same batch,
@@ -183,8 +183,8 @@ shareable artifact: copy it out (or commit it anywhere) and `Load` it by path to
 share fixtures across tests, machines, and languages.
 
 ```rust,ignore
-let accounts = test.add(Load::accounts("fixtures/pool.dump")); // -> Vec<Pubkey>
-test.add(Load::program("fixtures/amm.dump"));                  // -> Pubkey
+let accounts = ctx.add(Load::accounts("fixtures/pool.dump")); // -> Vec<Pubkey>
+ctx.add(Load::program("fixtures/amm.dump"));                  // -> Pubkey
 ```
 
 ## Outcomes
@@ -194,13 +194,17 @@ assert on it — and it holds only stable, backend-neutral data. Assertions pani
 with actionable messages (and are chainable, returning `&Self`); reads return
 plain values or `Option`.
 
-`succeeds()` yields a **transaction witness** — checks only exist on a proven
-success, so an account assert on a failed transaction is a compile error.
-Every fact takes its subject and one *expectation*: a plain value means
-equality, a closure is a predicate over the measured value:
+Verdicts are checks. `Outcome::success()` states intent; `Outcome::error(..)`
+asserts an exact failure (a `ProgramError`, or a program's typed error —
+anything `Into<u32>`). Facts **self-diagnose**: one evaluated against a failed
+transaction panics leading with the transaction's error and logs, so an
+unstated success still fails loudly with the real cause. Every fact takes its
+subject and one *expectation*: a plain value means equality, a closure is a
+predicate over the measured value:
 
 ```rust,ignore
-test.execute(withdraw).succeeds().checks([
+ctx.execute(withdraw).checks([
+    Outcome::success(),
     Cu::spent(|cu| cu <= 20_000),
     Account::lamports(recipient, 1_000_000),          // value ⇒ equality
     Account::lamports(user, |x| x > 0),               // predicate ⇒ anything
@@ -212,6 +216,8 @@ test.execute(withdraw).succeeds().checks([
     TokenAccount::amount(user_ata, |x| x >= 500),
     ReturnData::is([7]),
 ]);
+
+ctx.execute(forged).check(Outcome::error(VaultError::Unauthorized));
 ```
 
 Everything is one type, [`CheckFn`] — leaf facts, `bundle([..])` groups, and
@@ -219,13 +225,14 @@ Everything is one type, [`CheckFn`] — leaf facts, `bundle([..])` groups, and
 nests and mixes freely, and a protocol's standard assertions become a plain
 function returning a bundle. Value expectations fail with `expected N, got M`;
 predicates cannot print their source, so they fail with the exact location of
-the line that built them plus the actual value. `fails(..)`/`fails_with(..)`
-yield a failed-transaction witness with the reads (logs, error, compute
-units) and deliberately no checks.
+the line that built them plus the actual value. On a failed execution the
+outcome keeps its reads (`failure()`, logs, compute units, changes) — but a
+failed transaction commits nothing, so unchanged world state is asserted with
+`ctx` reads, not facts.
 
 ### Bundles and invariants
 
-`bundle([..])` turns several checks into one; `test.invariant(..)` registers
+`bundle([..])` turns several checks into one; `ctx.invariant(..)` registers
 any check — fact, bundle, or `CheckFn::new` closure — to run after every
 *successful* committed execution (failed sends commit nothing; simulations never
 run invariants), so a protocol invariant is written once and enforced
@@ -236,9 +243,9 @@ fn solvent(pool: Pubkey) -> CheckFn {
     Account::data(pool, |p: &Pool| p.reserves >= p.obligations)
 }
 
-test.invariant(solvent(pool));                    // every send now enforces it
-test.execute(swap)
-    .succeeds()
+ctx.invariant(solvent(pool));                    // every send now enforces it
+ctx.execute(swap)
+    .check(Outcome::success())
     .check(CheckFn::new(|tx| assert_eq!(tx.logs().len(), 3)));
 ```
 
@@ -249,7 +256,7 @@ only sometimes applies.
 Reads pull structured data back out:
 
 ```rust,ignore
-let out = test.simulate(instruction);
+let out = ctx.simulate(instruction);
 out.logs();                     // &[String], execution order
 out.compute_units();            // u64
 out.return_value(decode);       // Option<T> from return data
@@ -273,9 +280,9 @@ both have a `_with` variant taking raw transaction-input accounts (useful when
 malformed input *is* the test case):
 
 ```rust,ignore
-test.execute(deposit);
-test.execute((deposit, withdraw));          // an atomic chain, mixed builder types
-test.simulate_with(withdraw, [forged_account]);
+ctx.execute(deposit);
+ctx.execute((deposit, withdraw));          // an atomic chain, mixed builder types
+ctx.simulate_with(withdraw, [forged_account]);
 ```
 
 ### Errors
@@ -284,7 +291,7 @@ test.simulate_with(withdraw, [forged_account]);
 type. Named variants cover the common runtime errors (`InsufficientFunds`,
 `MissingRequiredSignature`, `InvalidAccountData`, `AccountAlreadyInitialized`,
 …); `Custom(u32)` carries a program-defined code (assert it ergonomically with
-`fails_with`, which takes anything `Into<u32>`); and `Runtime(String)` catches
+`Outcome::error`, which takes anything `Into<u32>`); and `Runtime(String)` catches
 anything outside the stable set. `co_signers(&[Pubkey])` builds read-only signer
 metas for authorities like multisig members.
 
@@ -299,10 +306,10 @@ straight back into the client type.
 ```rust,ignore
 // `write` serializes with wincode and installs a rent-exempt account owned by an
 // explicit program (the substrate carries no ownership of its own). Returns the address.
-test.write(vault, program_id, VaultState { authority, amount: 1_000 });
+ctx.write(vault, program_id, VaultState { authority, amount: 1_000 });
 
 // `read` decodes the full account data back through the same schema.
-let vault_state = test.read::<VaultState>(vault);
+let vault_state = ctx.read::<VaultState>(vault);
 assert_eq!(vault_state.amount, 1_000);
 
 // The returned Snapshot<T> derefs to T and also reports where it was read:
@@ -311,7 +318,7 @@ assert!(vault_state.lamports() > 0);
 
 // `read_at` decodes a suffix — a type covering only the bytes after a
 // discriminator the caller frames separately.
-let amount = test.read_at::<u64>(vault, DISCRIMINATOR_LEN + 32);
+let amount = ctx.read_at::<u64>(vault, DISCRIMINATOR_LEN + 32);
 ```
 
 **Trailing-bytes rule.** wincode reads exactly `T`'s bytes and stops. Any
@@ -337,7 +344,7 @@ token_program)` derives an associated-token address without installing it.
 - **`Dump::program(id)`** — pull a real program from the network into the store.
 - **`Load::program(path)`** — install a program from a dump file on disk.
 - The primary program under test needs none of these — `#[parallax_test]` and
-  `Test::builder` load it for you.
+  `Ctx::builder` load it for you.
 
 ## Guarantees
 

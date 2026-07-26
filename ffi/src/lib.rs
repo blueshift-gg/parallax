@@ -1,6 +1,6 @@
 //! C-ABI transport for the `parallax-svm` test harness.
 //!
-//! This crate is a thin, panic-safe boundary over [`parallax_svm::Test`]. The
+//! This crate is a thin, panic-safe boundary over [`parallax_svm::Ctx`]. The
 //! core owns every harness semantic; this crate only marshals option-bags in
 //! and result bundles out. The binary wire format — the contract consumers
 //! (the `parallax-svm` npm package via koffi, or any C caller) implement
@@ -312,7 +312,7 @@ mod tests {
 
     /// A world with no primary program (`elf_len == 0`) still executes
     /// built-in programs: the fixture-only test worlds the TypeScript shell
-    /// constructs with `new Test()` depend on this path.
+    /// constructs with `new Ctx()` depend on this path.
     #[test]
     fn program_less_world_executes_builtin_programs() {
         let program_id = [0u8; 32];
@@ -462,7 +462,7 @@ mod tests {
 
         // Raw pointers are !Send; carry the address across the thread boundary
         // exactly as a C caller sharing the handle would, provenance preserved.
-        struct SendHandle(*mut parallax_svm::Test);
+        struct SendHandle(*mut parallax_svm::Ctx);
         unsafe impl Send for SendHandle {}
         let moved = SendHandle(handle);
 
@@ -486,7 +486,7 @@ mod tests {
     }
 
     /// Build a program-less world for the boundary-robustness tests below.
-    fn program_less_handle() -> *mut parallax_svm::Test {
+    fn program_less_handle() -> *mut parallax_svm::Ctx {
         let program_id = [0u8; 32];
         let handle = parallax_new(
             &program_id as *const [u8; 32],
@@ -570,8 +570,8 @@ mod bench {
     use {
         crate::wire,
         parallax_svm::{
-            fixture::Wallet, system_program, Account, AccountMeta, Instruction, Outcome, Pubkey,
-            Test,
+            fixture::Wallet, system_program, Account, AccountMeta, Ctx, Instruction, Outcome,
+            Pubkey,
         },
         std::time::Instant,
     };
@@ -609,7 +609,7 @@ mod bench {
     /// Build a real committed `Outcome` whose recipient carries `data_len` bytes,
     /// so the bundle exercises a large writable account crossing the wire.
     fn transfer_outcome(data_len: usize) -> Outcome {
-        let mut test = Test::builder(Pubkey::new_from_array([0; 32]))
+        let mut test = Ctx::builder(Pubkey::new_from_array([0; 32]))
             .no_program()
             .build()
             .expect("program-less world builds");

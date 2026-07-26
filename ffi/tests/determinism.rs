@@ -10,7 +10,7 @@
 
 use parallax_svm::{
     fixture::{Mint, TokenProgram, Wallet},
-    system_program, AccountMeta, Instruction, Pubkey, Test,
+    system_program, AccountMeta, Ctx, Instruction, Pubkey,
 };
 use parallax_svm_ffi::wire;
 
@@ -32,7 +32,7 @@ type ScenarioBytes = (Box<[u8]>, Box<[u8]>, Vec<Box<[u8]>>);
 /// Run one fixed, non-trivial scenario in a fresh world and return the raw wire
 /// bytes a consumer would observe.
 fn scenario() -> ScenarioBytes {
-    let mut test = Test::builder(Pubkey::new_from_array([0; 32]))
+    let mut test = Ctx::builder(Pubkey::new_from_array([0; 32]))
         .no_program()
         .build()
         .expect("program-less world builds");

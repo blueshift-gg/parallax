@@ -19,14 +19,14 @@
 //!
 //! So the core exposes resolution as two synchronous steps:
 //!
-//! 1. [`Test::dump_plan`] reads the store, installs every cache **hit**, and —
+//! 1. [`Ctx::dump_plan`] reads the store, installs every cache **hit**, and —
 //!    when there are **misses** — returns the exact JSON-RPC request body to
 //!    POST. It performs no I/O of its own.
 //! 2. The frontend transports that body however it likes and hands the response
-//!    back to [`Test::dump_commit`], which parses it, writes the store, and
+//!    back to [`Ctx::dump_commit`], which parses it, writes the store, and
 //!    installs the fetched accounts.
 //!
-//! A native Rust test never sees the seam: [`Test::add`](crate::Test::add) of a
+//! A native Rust test never sees the seam: [`Ctx::add`](crate::Ctx::add) of a
 //! `Dump` runs both steps back to back, using the built-in [`UreqTransport`]
 //! (the `native-rpc` feature) between them. The FFI cdylib is built without that
 //! feature, so it carries no TLS stack and opens no socket; the TypeScript shell
@@ -34,7 +34,7 @@
 //! Either way the store format and every coherence rule are single-sourced here.
 
 use {
-    crate::{world::Test, Account, Pubkey},
+    crate::{world::Ctx, Account, Pubkey},
     base64::{engine::general_purpose::STANDARD, Engine as _},
     serde_json::{json, Value},
     solana_sdk_ids::bpf_loader_upgradeable,
@@ -46,7 +46,7 @@ use {
     },
 };
 
-/// Default endpoint used when a world sets no [`rpc`](crate::TestBuilder::rpc):
+/// Default endpoint used when a world sets no [`rpc`](crate::CtxBuilder::rpc):
 /// the public mainnet-beta RPC. This is a code-only default — there is
 /// deliberately no environment-variable override.
 pub(crate) const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -533,7 +533,7 @@ fn program_elf(
 // Resolution (installed into the world)
 // ---------------------------------------------------------------------------
 
-/// Result of [`Test::dump_plan`]: the request body to POST (empty when nothing
+/// Result of [`Ctx::dump_plan`]: the request body to POST (empty when nothing
 /// needs fetching) and the misses it covers, each with its role code.
 #[doc(hidden)]
 pub struct DumpPlan {
@@ -543,7 +543,7 @@ pub struct DumpPlan {
     pub misses: Vec<(Pubkey, u8)>,
 }
 
-impl Test {
+impl Ctx {
     /// Phase one of a dump. Reads the store, installs every cache hit, and
     /// returns the batched request body for the misses (empty when the store
     /// already covers every target). A `Program` miss expands to fetch its
@@ -919,7 +919,7 @@ mod tests {
         super::*,
         crate::{
             fixture::{Dump, Load},
-            AccountMeta, Instruction, Test,
+            AccountMeta, Ctx, Instruction,
         },
         std::sync::Mutex,
     };
@@ -956,8 +956,8 @@ mod tests {
         .unwrap()
     }
 
-    fn world(dir: &Path, transport: Box<dyn DumpTransport>) -> Test {
-        Test::builder(Pubkey::new_from_array([0; 32]))
+    fn world(dir: &Path, transport: Box<dyn DumpTransport>) -> Ctx {
+        Ctx::builder(Pubkey::new_from_array([0; 32]))
             .no_program()
             .project_dir(dir.to_string_lossy().into_owned())
             .transport(transport)
@@ -1186,7 +1186,7 @@ mod tests {
     // The hint is non-noisy: a world with no dumps attaches none, even on failure.
     #[test]
     fn no_guided_hint_without_dumps() {
-        let mut test = Test::builder(Pubkey::new_from_array([0; 32]))
+        let mut test = Ctx::builder(Pubkey::new_from_array([0; 32]))
             .no_program()
             .build()
             .unwrap();
@@ -1268,7 +1268,7 @@ mod tests {
         let file = dir.join(STORE_DIR).join(format!("{address}.{DUMP_EXT}"));
         assert!(file.is_file());
 
-        let mut test = Test::builder(Pubkey::new_from_array([0; 32]))
+        let mut test = Ctx::builder(Pubkey::new_from_array([0; 32]))
             .no_program()
             .transport(Box::new(PanicTransport))
             .build()
@@ -1295,7 +1295,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut test = Test::builder(Pubkey::new_from_array([0; 32]))
+        let mut test = Ctx::builder(Pubkey::new_from_array([0; 32]))
             .no_program()
             .build()
             .unwrap();
@@ -1328,7 +1328,7 @@ mod tests {
             return;
         }
         let dir = temp_project("live");
-        let mut test = Test::builder(Pubkey::new_from_array([0; 32]))
+        let mut test = Ctx::builder(Pubkey::new_from_array([0; 32]))
             .no_program()
             .project_dir(dir.to_string_lossy().into_owned())
             .build()

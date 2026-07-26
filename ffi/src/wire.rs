@@ -896,7 +896,7 @@ pub fn serialize_outcome(outcome: &Outcome) -> Box<[u8]> {
     let mut w = Writer::with_capacity(estimate);
 
     // Status.
-    match outcome.error() {
+    match outcome.failure() {
         None => w.write_bool(false),
         Some(error) => {
             w.write_bool(true);

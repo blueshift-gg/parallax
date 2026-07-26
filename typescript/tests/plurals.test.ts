@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { getAddressDecoder, type Address as KitAddress } from "@solana/kit";
 import { Address } from "@solana/web3.js";
 import {
-  Test as KitTest,
+  Ctx as KitTest,
   mint as kitMint,
   wallet as kitWallet,
 } from "../src/kit.js";
-import { Test as Web3Test, wallet as web3Wallet } from "../src/web3.js";
+import { Ctx as Web3Test, wallet as web3Wallet } from "../src/web3.js";
 
 let seed = 0;
 function kitAddr(): KitAddress {

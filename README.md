@@ -33,17 +33,17 @@ parallax-svm = "0.1"
 use parallax_svm::prelude::*;
 
 #[parallax_test]
-fn deposits_into_the_vault(test: &mut Test) {
-    let authority = test.add(Wallet::account());
+fn deposits_into_the_vault() {
+    let authority = ctx.add(Wallet::account());
 
-    test.execute(DepositInstruction { authority, amount: 1_000_000_000 })
-        .succeeds()
+    ctx.execute(DepositInstruction { authority, amount: 1_000_000_000 })
+        .check(Outcome::success())
         .check(Cu::spent(|cu| cu <= 10_000));
 }
 ```
 
 `#[parallax_test]` expands to a plain `#[test]` that loads the current crate's
-compiled program into an isolated `Test` world — the program id defaults to
+compiled program into an isolated `Ctx` world — the program id defaults to
 `crate::ID`. That is the whole setup.
 
 ## Why Parallax
@@ -69,25 +69,25 @@ One deposit test, in Rust and in TypeScript.
 ```rust,ignore
 // Rust
 #[parallax_test]
-fn deposits(test: &mut Test) {
-    let user = test.add(Wallet::account());
+fn deposits() {
+    let user = ctx.add(Wallet::account());
 
-    test.execute(DepositInstruction { user, amount: 1_000 })
-        .succeeds()
+    ctx.execute(DepositInstruction { user, amount: 1_000 })
+        .check(Outcome::success())
         .check(TokenAccount::amount(vault_of(user), 1_000));
 }
 ```
 
 ```ts
 // TypeScript (Kit)
-import { Test, wallet } from "parallax-svm/kit";
+import { Ctx, wallet } from "parallax-svm/kit";
 import { PROGRAM_ADDRESS, VaultClient } from "./client/index.js";
 
-using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/vault.so");
-const user = await test.add(wallet());
+using test = await Ctx.open(PROGRAM_ADDRESS, "target/deploy/vault.so");
+const user = await ctx.add(wallet());
 const deposit = await new VaultClient().createDepositInstruction({ user, amount: 1_000n });
 
-test.execute(deposit).succeeds().check(TokenAccount.amount(vaultOf(user), 1_000n));
+ctx.execute(deposit).check(Outcome::success()).check(TokenAccount.amount(vaultOf(user), 1_000n));
 ```
 
 `parallax-svm/kit` and `parallax-svm/web3.js` are thin shells over the same Rust
@@ -97,13 +97,13 @@ core; the member names are identical, camel-cased. See [`typescript/`](typescrip
 
 ### Fixtures are values
 
-A fixture is any value implementing `Fixture`; `test.add` installs it and returns
+A fixture is any value implementing `Fixture`; `ctx.add` installs it and returns
 the address(es) it placed — the only composition primitive.
 
 ```rust,ignore
-let [alice, bob] = test.add([Wallet::account().fund(7); 2]); // two fresh funded actors
+let [alice, bob] = ctx.add([Wallet::account().fund(7); 2]); // two fresh funded actors
 
-let mint = test.add(
+let mint = ctx.add(
     Mint::account()
         .with_authority(alice)
         .with_holder([(alice, 400), (bob, 600)]),          // one funded ATA per holder
@@ -117,9 +117,9 @@ the [reference](docs/rust_reference.md#fixtures-are-values).
 ### Dump real mainnet state
 
 ```rust,ignore
-let [pool, oracle] = test.add(Dump::accounts([POOL, ORACLE]));
-test.add(Dump::program(AMM_PROGRAM).sync_clock());   // adopt the dumped slot's clock
-test.execute(SwapInstruction { pool, oracle }).succeeds();
+let [pool, oracle] = ctx.add(Dump::accounts([POOL, ORACLE]));
+ctx.add(Dump::program(AMM_PROGRAM).sync_clock());   // adopt the dumped slot's clock
+ctx.execute(SwapInstruction { pool, oracle }).check(Outcome::success());
 ```
 
 - **First run fetches once** — one batched `getMultipleAccounts` at one slot;
@@ -137,8 +137,8 @@ asserts the whole world — checks panic with address-naming messages, reads
 return plain values.
 
 ```rust,ignore
-test.execute(withdraw)
-    .succeeds()                            // or: .fails_with(VaultError::Unauthorized)
+ctx.execute(withdraw)
+    .check(Outcome::success())                            // or: .check(Outcome::error(VaultError::Unauthorized))
     .checks([
         Account::lamports(recipient, 1_000_000),
         Account::owner(vault, program_id),
@@ -147,7 +147,7 @@ test.execute(withdraw)
     ]);
 ```
 
-`test.invariant(check)` registers any check — built-in or your own `Check`
+`ctx.invariant(check)` registers any check — built-in or your own `Check`
 struct — to run after every send, so a protocol invariant is written once and
 enforced everywhere.
 
@@ -160,9 +160,9 @@ State is read and written with [wincode](https://docs.rs/wincode) — a standard
 not a framework — so any program's accounts decode.
 
 ```rust,ignore
-test.write(vault, program_id, VaultState { authority, amount: 1_000 });
+ctx.write(vault, program_id, VaultState { authority, amount: 1_000 });
 
-let state = test.read::<VaultState>(vault);   // Snapshot<T>, derefs to T
+let state = ctx.read::<VaultState>(vault);   // Snapshot<T>, derefs to T
 assert_eq!(state.amount, 1_000);
 ```
 
@@ -178,11 +178,11 @@ is under test is the program's *own* authorization, not the runtime's.
 
 ```rust,ignore
 // Prove the program rejects an attacker who merely *claims* to be the authority.
-let attacker = test.add(Wallet::account());
+let attacker = ctx.add(Wallet::account());
 let mut forged: Instruction = WithdrawInstruction { vault }.into();
 forged.accounts.push(AccountMeta::new_readonly(attacker, true));  // spoofed signer
 
-test.execute(forged).fails_with(VaultError::Unauthorized);
+ctx.execute(forged).check(Outcome::error(VaultError::Unauthorized));
 ```
 
 For legitimate multisig members, `co_signers(&[..])` builds the read-only signer
@@ -191,7 +191,7 @@ metas; the harness backfills each as a funded account for free.
 ### Time control
 
 ```rust,ignore
-test.warp_to_timestamp(1_800_000_000);   // set the clock's Unix timestamp
+ctx.warp_to_timestamp(1_800_000_000);   // set the clock's Unix timestamp
 ```
 
 Nothing advances the clock implicitly; `sync_clock` (via a `Dump`) adopts a

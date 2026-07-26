@@ -88,11 +88,11 @@ const char *parallax_last_error(void);
  * the per-thread `parallax_last_error`, so read it on the same thread that made
  * the failing call.
  */
-Test *parallax_new(const uint8_t (*program_id)[32],
-                   const uint8_t *elf,
-                   uint64_t elf_len,
-                   bool has_compute_unit_limit,
-                   uint64_t compute_unit_limit);
+Ctx *parallax_new(const uint8_t (*program_id)[32],
+                  const uint8_t *elf,
+                  uint64_t elf_len,
+                  bool has_compute_unit_limit,
+                  uint64_t compute_unit_limit);
 
 /**
  * Free a handle returned by [`parallax_new`]. Safe on null.
@@ -102,7 +102,7 @@ Test *parallax_new(const uint8_t (*program_id)[32],
  * still ensure no other call is using the handle concurrently (see the
  * [`parallax_new`] threading contract).
  */
-void parallax_free(Test *handle);
+void parallax_free(Ctx *handle);
 
 /**
  * Free a result buffer previously returned through a `result_out`/`result_len`
@@ -114,13 +114,13 @@ void parallax_free_bytes(uint8_t *ptr, uint64_t len);
  * Reconfigure the transaction compute-unit limit on an existing world. Backs
  * the TypeScript runtime's `setComputeBudget`.
  */
-int32_t parallax_set_compute_unit_limit(Test *handle, uint64_t limit);
+int32_t parallax_set_compute_unit_limit(Ctx *handle, uint64_t limit);
 
 /**
  * Preload a program (by id and ELF) for cross-program invocations. Also serves
  * as the program fixture install: the resulting address is the caller's `id`.
  */
-int32_t parallax_load_program(Test *handle,
+int32_t parallax_load_program(Ctx *handle,
                               const uint8_t (*program_id)[32],
                               const uint8_t *elf,
                               uint64_t elf_len);
@@ -128,13 +128,13 @@ int32_t parallax_load_program(Test *handle,
 /**
  * Set the runtime clock's Unix timestamp.
  */
-int32_t parallax_warp_to_timestamp(Test *handle, int64_t timestamp);
+int32_t parallax_warp_to_timestamp(Ctx *handle, int64_t timestamp);
 
 /**
  * Install a funded system wallet from a `WalletInput` option-bag. Writes the
  * resulting 32-byte address into `address_out`.
  */
-int32_t parallax_install_wallet(Test *handle,
+int32_t parallax_install_wallet(Ctx *handle,
                                 const uint8_t *input,
                                 uint64_t input_len,
                                 uint8_t *address_out);
@@ -143,7 +143,7 @@ int32_t parallax_install_wallet(Test *handle,
  * Install a token account from a `TokenAccountInput` option-bag. Writes the
  * resulting 32-byte address into `address_out`.
  */
-int32_t parallax_install_token_account(Test *handle,
+int32_t parallax_install_token_account(Ctx *handle,
                                        const uint8_t *input,
                                        uint64_t input_len,
                                        uint8_t *address_out);
@@ -152,7 +152,7 @@ int32_t parallax_install_token_account(Test *handle,
  * Install an associated-token account from an `AtaInput` option-bag. Writes the
  * derived 32-byte address into `address_out`.
  */
-int32_t parallax_install_ata(Test *handle,
+int32_t parallax_install_ata(Ctx *handle,
                              const uint8_t *input,
                              uint64_t input_len,
                              uint8_t *address_out);
@@ -161,7 +161,7 @@ int32_t parallax_install_ata(Test *handle,
  * Install a raw account from a `RawAccountInput` option-bag. Writes the
  * resulting 32-byte address into `address_out`.
  */
-int32_t parallax_install_raw_account(Test *handle,
+int32_t parallax_install_raw_account(Ctx *handle,
                                      const uint8_t *input,
                                      uint64_t input_len,
                                      uint8_t *address_out);
@@ -172,7 +172,7 @@ int32_t parallax_install_raw_account(Test *handle,
  * `result_out`/`result_len_out`: index 0 is the mint, indices 1.. are holder
  * ATAs in holder order. Free the buffer with [`parallax_free_bytes`].
  */
-int32_t parallax_install_mint(Test *handle,
+int32_t parallax_install_mint(Ctx *handle,
                               const uint8_t *input,
                               uint64_t input_len,
                               uint8_t **result_out,
@@ -183,7 +183,7 @@ int32_t parallax_install_mint(Test *handle,
  * `result_out`/`result_len_out` (a leading `0` byte means no account). Free the
  * buffer with [`parallax_free_bytes`].
  */
-int32_t parallax_get_account(Test *handle,
+int32_t parallax_get_account(Ctx *handle,
                              const uint8_t (*address)[32],
                              uint8_t **result_out,
                              uint64_t *result_len_out);
@@ -194,7 +194,7 @@ int32_t parallax_get_account(Test *handle,
  * explicit input accounts (pass a null pointer with length 0 for none). Free
  * the bundle with [`parallax_free_bytes`].
  */
-int32_t parallax_send(Test *handle,
+int32_t parallax_send(Ctx *handle,
                       const uint8_t *instructions,
                       uint64_t instructions_len,
                       const uint8_t *accounts,
@@ -206,7 +206,7 @@ int32_t parallax_send(Test *handle,
  * Execute an instruction chain without committing, returning an outcome bundle.
  * Arguments match [`parallax_send`].
  */
-int32_t parallax_simulate(Test *handle,
+int32_t parallax_simulate(Ctx *handle,
                           const uint8_t *instructions,
                           uint64_t instructions_len,
                           const uint8_t *accounts,
@@ -220,7 +220,7 @@ int32_t parallax_simulate(Test *handle,
  * An empty request body means the store already covered every target. Free the
  * buffer with [`parallax_free_bytes`].
  */
-int32_t parallax_dump_plan(Test *handle,
+int32_t parallax_dump_plan(Ctx *handle,
                            const uint8_t *input,
                            uint64_t input_len,
                            uint8_t **result_out,
@@ -230,14 +230,14 @@ int32_t parallax_dump_plan(Test *handle,
  * Phase two of a dump: given the shell-fetched RPC response for the misses,
  * write the store and install the fetched accounts. Returns a status only.
  */
-int32_t parallax_dump_commit(Test *handle, const uint8_t *input, uint64_t input_len);
+int32_t parallax_dump_commit(Ctx *handle, const uint8_t *input, uint64_t input_len);
 
 /**
  * Install accounts (or a program) from a dump file by path, returning the
  * installed addresses as a count-prefixed pubkey list through
  * `result_out`/`result_len_out`. Free the buffer with [`parallax_free_bytes`].
  */
-int32_t parallax_load(Test *handle,
+int32_t parallax_load(Ctx *handle,
                       const uint8_t *input,
                       uint64_t input_len,
                       uint8_t **result_out,

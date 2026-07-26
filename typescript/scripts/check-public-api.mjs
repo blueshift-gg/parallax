@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 //   1. Specifier check — no published `.d.ts` may name a private transport
 //      (koffi, litesvm, the internal kernel) in an import/export.
 //   2. Surface snapshot — the public method/property names of the exported
-//      `Test` and `Outcome` classes, resolved from the built `.d.ts` (inherited
+//      `Ctx` and `Outcome` classes, resolved from the built `.d.ts` (inherited
 //      and static members included, `protected`/`private`/`#private` excluded),
 //      must equal a committed expected list. A new public method, or an
 //      accidentally-public install-plumbing method, fails the gate until the
@@ -55,7 +55,7 @@ for (const declaration of entryDeclarations) {
 // expose the identical member names; only the address/account types differ).
 // Keep alphabetically sorted. Update deliberately when the public API changes.
 const EXPECTED = {
-  Test: {
+  Ctx: {
     instance: [
       "[Symbol.dispose]",
       "account",
@@ -92,18 +92,16 @@ const EXPECTED = {
       "check",
       "checks",
       "computeUnits",
-      "error",
+      "diagnostics",
+      "failure",
       "events",
-      "fails",
-      "failsWith",
       "isErr",
       "isOk",
       "logs",
       "returnData",
       "returnValue",
-      "succeeds",
     ],
-    static: [],
+    static: ["error", "success"],
   },
 };
 

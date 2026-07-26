@@ -31,7 +31,7 @@ type Installed<Input> = Input extends readonly unknown[]
   : FixtureValue<Input>;
 
 /** Stable runtime limits accepted by both TypeScript test adapters. */
-export interface TestOptions {
+export interface CtxOptions {
   /** Maximum compute units available to one transaction. */
   readonly computeUnitLimit?: bigint;
   /**
@@ -46,7 +46,7 @@ export interface TestOptions {
 const DUMP_ROLE_ACCOUNT = 0;
 const DUMP_ROLE_PROGRAM = 1;
 
-/** Default RPC endpoint when `TestOptions.rpc` is unset. */
+/** Default RPC endpoint when `CtxOptions.rpc` is unset. */
 const DEFAULT_RPC_URL = "https://api.mainnet-beta.solana.com";
 
 /**
@@ -106,7 +106,7 @@ export class TestCore<Address, Account, Instruction, Output> {
     adapter: HarnessAdapter<Address, Account, Instruction, Output>,
     programId?: Address,
     elf?: Uint8Array,
-    options: TestOptions = {},
+    options: CtxOptions = {},
   ) {
     if ((programId === undefined) !== (elf === undefined)) {
       throw new Error("Test needs both a program address and ELF, or neither");

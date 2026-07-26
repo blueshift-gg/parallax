@@ -16,22 +16,22 @@ use crate::error::*;
 use crate::wire;
 use parallax_svm::{
     fixture::{AssociatedTokenAccount, Mint, TokenAccount, Wallet},
-    Account, Pubkey, Test,
+    Account, Ctx, Pubkey,
 };
 
-/// The opaque world handle: a [`Test`] plus the id of the thread that created
+/// The opaque world handle: a [`Ctx`] plus the id of the thread that created
 /// it.
 ///
 /// [`parallax_new`] boxes this and hands its address out as the opaque
-/// `*mut Test` the C ABI names; every entry point reinterprets that pointer as
+/// `*mut Ctx` the C ABI names; every entry point reinterprets that pointer as
 /// `*mut Handle` (see [`resolve`]) to reach both the world and its owning
 /// thread. The pointee's real type is `Handle`, but it stays opaque to C, so
-/// the header's `Test *` label is unchanged.
+/// the header's `Ctx *` label is unchanged.
 struct Handle {
     /// Thread that called [`parallax_new`]. Every later call on this handle
     /// must come from it; see the [`parallax_new`] threading contract.
     created_on: std::thread::ThreadId,
-    test: Test,
+    test: Ctx,
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ pub extern "C" fn parallax_new(
     elf_len: u64,
     has_compute_unit_limit: bool,
     compute_unit_limit: u64,
-) -> *mut Test {
+) -> *mut Ctx {
     clear_last_error();
     // A null `elf` is only valid for the no-program case (`elf_len == 0`).
     if program_id.is_null() || (elf.is_null() && elf_len != 0) {
@@ -88,10 +88,10 @@ pub extern "C" fn parallax_new(
     let built = catch_unwind(AssertUnwindSafe(|| {
         let id = Pubkey::new_from_array(unsafe { *program_id });
         let mut builder = if elf_len == 0 {
-            Test::builder(id).no_program()
+            Ctx::builder(id).no_program()
         } else {
             let elf = unsafe { slice::from_raw_parts(elf, elf_len as usize) };
-            Test::builder(id).program_bytes(elf.to_vec())
+            Ctx::builder(id).program_bytes(elf.to_vec())
         };
         if has_compute_unit_limit {
             builder = builder.compute_unit_limit(compute_unit_limit);
@@ -100,12 +100,12 @@ pub extern "C" fn parallax_new(
     }));
     match built {
         // Box a `Handle` (world + creating thread) and hand its address out as
-        // the opaque `*mut Test`; `resolve` recovers the `Handle` on every call.
+        // the opaque `*mut Ctx`; `resolve` recovers the `Handle` on every call.
         Ok(Ok(test)) => Box::into_raw(Box::new(Handle {
             created_on: std::thread::current().id(),
             test,
         }))
-        .cast::<Test>(),
+        .cast::<Ctx>(),
         Ok(Err(error)) => {
             set_last_error(format!("could not build world: {error}"));
             ptr::null_mut()
@@ -124,7 +124,7 @@ pub extern "C" fn parallax_new(
 /// still ensure no other call is using the handle concurrently (see the
 /// [`parallax_new`] threading contract).
 #[unsafe(no_mangle)]
-pub extern "C" fn parallax_free(handle: *mut Test) {
+pub extern "C" fn parallax_free(handle: *mut Ctx) {
     if !handle.is_null() {
         // Dropping the world runs the backend's destructor; guard the unwind so a
         // panic there can never cross the C boundary (which would be undefined
@@ -153,7 +153,7 @@ pub extern "C" fn parallax_free_bytes(ptr: *mut u8, len: u64) {
 /// Reconfigure the transaction compute-unit limit on an existing world. Backs
 /// the TypeScript runtime's `setComputeBudget`.
 #[unsafe(no_mangle)]
-pub extern "C" fn parallax_set_compute_unit_limit(handle: *mut Test, limit: u64) -> i32 {
+pub extern "C" fn parallax_set_compute_unit_limit(handle: *mut Ctx, limit: u64) -> i32 {
     with_test(handle, |test| {
         test.set_compute_unit_limit(limit);
         PARALLAX_OK
@@ -164,7 +164,7 @@ pub extern "C" fn parallax_set_compute_unit_limit(handle: *mut Test, limit: u64)
 /// as the program fixture install: the resulting address is the caller's `id`.
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_load_program(
-    handle: *mut Test,
+    handle: *mut Ctx,
     program_id: *const [u8; 32],
     elf: *const u8,
     elf_len: u64,
@@ -198,7 +198,7 @@ pub extern "C" fn parallax_load_program(
 
 /// Set the runtime clock's Unix timestamp.
 #[unsafe(no_mangle)]
-pub extern "C" fn parallax_warp_to_timestamp(handle: *mut Test, timestamp: i64) -> i32 {
+pub extern "C" fn parallax_warp_to_timestamp(handle: *mut Ctx, timestamp: i64) -> i32 {
     with_test(handle, |test| {
         test.warp_to_timestamp(timestamp);
         PARALLAX_OK
@@ -213,7 +213,7 @@ pub extern "C" fn parallax_warp_to_timestamp(handle: *mut Test, timestamp: i64) 
 /// resulting 32-byte address into `address_out`.
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_install_wallet(
-    handle: *mut Test,
+    handle: *mut Ctx,
     input: *const u8,
     input_len: u64,
     address_out: *mut u8,
@@ -236,7 +236,7 @@ pub extern "C" fn parallax_install_wallet(
 /// resulting 32-byte address into `address_out`.
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_install_token_account(
-    handle: *mut Test,
+    handle: *mut Ctx,
     input: *const u8,
     input_len: u64,
     address_out: *mut u8,
@@ -258,7 +258,7 @@ pub extern "C" fn parallax_install_token_account(
 /// derived 32-byte address into `address_out`.
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_install_ata(
-    handle: *mut Test,
+    handle: *mut Ctx,
     input: *const u8,
     input_len: u64,
     address_out: *mut u8,
@@ -277,7 +277,7 @@ pub extern "C" fn parallax_install_ata(
 /// resulting 32-byte address into `address_out`.
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_install_raw_account(
-    handle: *mut Test,
+    handle: *mut Ctx,
     input: *const u8,
     input_len: u64,
     address_out: *mut u8,
@@ -300,7 +300,7 @@ pub extern "C" fn parallax_install_raw_account(
 /// ATAs in holder order. Free the buffer with [`parallax_free_bytes`].
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_install_mint(
-    handle: *mut Test,
+    handle: *mut Ctx,
     input: *const u8,
     input_len: u64,
     result_out: *mut *mut u8,
@@ -347,7 +347,7 @@ pub extern "C" fn parallax_install_mint(
 /// buffer with [`parallax_free_bytes`].
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_get_account(
-    handle: *mut Test,
+    handle: *mut Ctx,
     address: *const [u8; 32],
     result_out: *mut *mut u8,
     result_len_out: *mut u64,
@@ -388,7 +388,7 @@ pub extern "C" fn parallax_get_account(
 /// the bundle with [`parallax_free_bytes`].
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_send(
-    handle: *mut Test,
+    handle: *mut Ctx,
     instructions: *const u8,
     instructions_len: u64,
     accounts: *const u8,
@@ -412,7 +412,7 @@ pub extern "C" fn parallax_send(
 /// Arguments match [`parallax_send`].
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_simulate(
-    handle: *mut Test,
+    handle: *mut Ctx,
     instructions: *const u8,
     instructions_len: u64,
     accounts: *const u8,
@@ -442,7 +442,7 @@ pub extern "C" fn parallax_simulate(
 /// buffer with [`parallax_free_bytes`].
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_dump_plan(
-    handle: *mut Test,
+    handle: *mut Ctx,
     input: *const u8,
     input_len: u64,
     result_out: *mut *mut u8,
@@ -473,7 +473,7 @@ pub extern "C" fn parallax_dump_plan(
 /// Phase two of a dump: given the shell-fetched RPC response for the misses,
 /// write the store and install the fetched accounts. Returns a status only.
 #[unsafe(no_mangle)]
-pub extern "C" fn parallax_dump_commit(handle: *mut Test, input: *const u8, input_len: u64) -> i32 {
+pub extern "C" fn parallax_dump_commit(handle: *mut Ctx, input: *const u8, input_len: u64) -> i32 {
     with_input_status(handle, input, input_len, |test, bytes| {
         let input = wire::deserialize_dump_commit_input(bytes)
             .map_err(|e| Failure::wire(format!("invalid dump commit input: {e}")))?;
@@ -492,7 +492,7 @@ pub extern "C" fn parallax_dump_commit(handle: *mut Test, input: *const u8, inpu
 /// `result_out`/`result_len_out`. Free the buffer with [`parallax_free_bytes`].
 #[unsafe(no_mangle)]
 pub extern "C" fn parallax_load(
-    handle: *mut Test,
+    handle: *mut Ctx,
     input: *const u8,
     input_len: u64,
     result_out: *mut *mut u8,
@@ -521,9 +521,9 @@ pub extern "C" fn parallax_load(
 
 /// Null-check and thread-check the handle, decode the input bytes, and run
 /// `body` for its side effects, returning a status code with no result blob.
-fn with_input_status<F>(handle: *mut Test, input: *const u8, input_len: u64, body: F) -> i32
+fn with_input_status<F>(handle: *mut Ctx, input: *const u8, input_len: u64, body: F) -> i32
 where
-    F: FnOnce(&mut Test, &[u8]) -> Result<(), Failure>,
+    F: FnOnce(&mut Ctx, &[u8]) -> Result<(), Failure>,
 {
     clear_last_error();
     let handle = match resolve(handle) {
@@ -560,13 +560,13 @@ where
 /// on another thread; not aliasing a live handle across threads remains the
 /// caller's contract, as it is for dereferencing any `*mut` the C ABI hands
 /// back.
-fn resolve<'a>(handle: *mut Test) -> Result<&'a mut Handle, i32> {
+fn resolve<'a>(handle: *mut Ctx) -> Result<&'a mut Handle, i32> {
     if handle.is_null() {
         set_last_error("null handle argument");
         return Err(PARALLAX_ERR_NULL_POINTER);
     }
     // SAFETY: a non-null handle came from `parallax_new`, which boxes a `Handle`
-    // and relabels its address as the opaque `*mut Test`; casting back recovers
+    // and relabels its address as the opaque `*mut Ctx`; casting back recovers
     // the same allocation. Liveness and the no-concurrent-aliasing contract are
     // the caller's, identical to dereferencing any handle the C ABI returns.
     let handle = unsafe { &mut *handle.cast::<Handle>() };
@@ -579,9 +579,9 @@ fn resolve<'a>(handle: *mut Test) -> Result<&'a mut Handle, i32> {
 
 /// Null-check and thread-check the handle and run `body` with a mutable core
 /// reference inside a panic guard.
-fn with_test<F>(handle: *mut Test, body: F) -> i32
+fn with_test<F>(handle: *mut Ctx, body: F) -> i32
 where
-    F: FnOnce(&mut Test) -> i32,
+    F: FnOnce(&mut Ctx) -> i32,
 {
     clear_last_error();
     let handle = match resolve(handle) {
@@ -600,14 +600,14 @@ where
 /// Shared body for single-address installs: decode the input, install, and write
 /// the resulting address into `address_out`.
 fn with_install<F>(
-    handle: *mut Test,
+    handle: *mut Ctx,
     input: *const u8,
     input_len: u64,
     address_out: *mut u8,
     install: F,
 ) -> i32
 where
-    F: FnOnce(&mut Test, &[u8]) -> Result<Pubkey, String>,
+    F: FnOnce(&mut Ctx, &[u8]) -> Result<Pubkey, String>,
 {
     clear_last_error();
     if address_out.is_null() {
@@ -657,7 +657,7 @@ impl Failure {
 
 /// Shared body for calls that return a variable-length blob.
 fn with_result<F>(
-    handle: *mut Test,
+    handle: *mut Ctx,
     input: *const u8,
     input_len: u64,
     result_out: *mut *mut u8,
@@ -665,7 +665,7 @@ fn with_result<F>(
     body: F,
 ) -> i32
 where
-    F: FnOnce(&mut Test, &[u8]) -> Result<Box<[u8]>, Failure>,
+    F: FnOnce(&mut Ctx, &[u8]) -> Result<Box<[u8]>, Failure>,
 {
     clear_last_error();
     if result_out.is_null() || result_len_out.is_null() {
@@ -698,7 +698,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn execute(
-    handle: *mut Test,
+    handle: *mut Ctx,
     instructions: *const u8,
     instructions_len: u64,
     accounts: *const u8,
