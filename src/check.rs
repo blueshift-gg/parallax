@@ -35,16 +35,11 @@ use {
 /// message when it does not hold.
 ///
 /// Built-in checks follow one shape — name the fact, bind its subject, then
-/// compare: [`Cu::spent`], [`Account::lamports`]/[`Account::owner`]/
-/// [`Account::data`]/[`Account::state`], [`Token::amount`]/[`Token::supply`],
+/// compare: [`Cu::spent`], [`Account::lamports`](crate::Account::lamports) and
+/// its `owner`/`data`/`state` siblings, [`Token::amount`]/[`Token::supply`],
 /// plus the transaction-scoped [`ReturnData`] and [`Changes`]. Closures,
 /// arrays, and tuples of checks all qualify, and applications implement the
 /// trait to name their own invariants:
-
-/// [`Account::lamports`]: crate::Account::lamports
-/// [`Account::owner`]: crate::Account::owner
-/// [`Account::data`]: crate::Account::data
-/// [`Account::state`]: crate::Account::state
 ///
 /// ```rust,ignore
 /// struct Solvent { pool: Pubkey }
