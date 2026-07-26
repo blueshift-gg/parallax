@@ -38,7 +38,7 @@ fn deposits_into_the_vault(test: &mut Test) {
 
     test.send(DepositInstruction { authority, amount: 1_000_000_000 })
         .succeeds()
-        .check(CuBudget::le(10_000));
+        .check(Cu::spent().le(10_000));
 }
 ```
 
@@ -74,7 +74,7 @@ fn deposits(test: &mut Test) {
 
     test.send(DepositInstruction { user, amount: 1_000 })
         .succeeds()
-        .check(Tokens::eq(vault_of(user), 1_000));
+        .check(Token::amount(vault_of(user)).eq(1_000));
 }
 ```
 
@@ -87,7 +87,7 @@ using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/vault.so");
 const user = await test.add(wallet());
 const deposit = await new VaultClient().createDepositInstruction({ user, amount: 1_000n });
 
-test.send(deposit).succeeds().check(Tokens.eq(vaultOf(user), 1_000n));
+test.send(deposit).succeeds().check(Token.amount(vaultOf(user)).eq(1_000n));
 ```
 
 `parallax-svm/kit` and `parallax-svm/web3.js` are thin shells over the same Rust
@@ -140,9 +140,9 @@ return plain values.
 test.send(withdraw)
     .succeeds()                            // or: .fails_with(VaultError::Unauthorized)
     .check([
-        Lamports::eq(recipient, 1_000_000),
-        Tokens::eq(vault, 600),
-        Owner::eq(vault, program_id),
+        Account::lamports(recipient).eq(1_000_000),
+        Account::owner(vault).eq(program_id),
+        Token::amount(user_ata).eq(600),
         Changes::eq([recipient, vault]),   // the exact changed set, in order
     ]);
 ```
@@ -166,8 +166,8 @@ let state = test.read::<VaultState>(vault);   // Snapshot<T>, derefs to T
 assert_eq!(state.amount, 1_000);
 ```
 
-`State::eq(addr, value)` asserts full decoded state; `State::with::<T>(addr, ..)`
-asserts partial facts. The trailing-bytes rule and the Rust/TS owner asymmetry
+`Account::state(addr).eq(value)` asserts full decoded state;
+`Account::state(addr).with::<T>(..)` asserts partial facts. The trailing-bytes rule and the Rust/TS owner asymmetry
 are in the
 [reference](docs/rust_reference.md#typed-state-is-wincode-native).
 

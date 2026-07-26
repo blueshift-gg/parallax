@@ -117,40 +117,32 @@ Assertions throw with actionable messages and chain (`return this`); reads retur
 plain values or `null`:
 
 The verdict is a method; every other assertion is a **check value** passed to
-`check`, mirroring Rust — one grammar, arrays group facts:
+`check`, mirroring Rust — name the fact, bind its subject, then compare:
 
 ```ts
-import { Changes, CuBudget, Lamports, Owner, State, Supply, Tokens } from "parallax-svm/kit";
+import { Account, Changes, Cu, Token } from "parallax-svm/kit";
 
 test
   .send(withdraw)
   .succeeds()                                  // or: .fails({ type: "InsufficientFunds" })
   .check([                                     //     .failsWith(6001)  — custom code
-    CuBudget.le(20_000n),
-    Lamports.eq(recipient, 1_000_000n),
-    Tokens.eq(vault, 600n),
-    Supply.eq(mint, 1_000n),
-    Owner.eq(vault, test.programId),
+    Cu.spent().le(20_000n),
+    Account.lamports(recipient).eq(1_000_000n),
+    Account.owner(vault).eq(test.programId),
+    Token.amount(userAta).eq(600n),
+    Token.supply(mint).eq(1_000n),
     Changes.eq([user, vault]),                 // the exact changed set, in order
     Changes.created(vault),
-    State.eq(VaultCodec, vault, { authority, amount: 600n }),
+    Account.state(VaultCodec, vault).eq({ authority, amount: 600n }),
   ]);
-
-const out = test.simulate(instruction);
-out.isOk();  out.isErr();  out.error;          // ProgramError | null
-out.logs;  out.computeUnits;  out.returnData;  // fields, not methods
-out.account(address);  out.accountAs(address, decode);  out.accounts();
-out.returnValue(decode);  out.events(decode);
-for (const change of out.accountChanges) {     // writable before/after
-  change.wasCreated();  change.wasRemoved();  change.before;  change.after;
-}
 ```
 
-The fact namespaces mirror Rust exactly — `CuBudget`/`Lamports`/`Tokens`/
-`Supply` with `eq, le, lt, ge, gt`; `Owner.eq`, `Data.eq`, `ReturnData.eq`;
-`State.eq(codec, addr, value)` (deep equality) and `State.with(codec, addr, cb)`;
-`Changes.eq([..])`, `Changes.created`, `Changes.removed`, `Changes.closed`. In
-TypeScript a check is simply a function of the outcome.
+The namespaces mirror Rust exactly — `Cu.spent()`, `Account.lamports(addr)`,
+`Account.owner(addr).eq`, `Account.data(addr).eq`,
+`Account.state(codec, addr).eq` (deep equality) / `.with(cb)`,
+`Token.amount(addr)` / `Token.supply(mint)`, `ReturnData.eq`, and
+`Changes.eq/created/removed/closed`; numeric facts take `eq, le, lt, ge, gt`.
+In TypeScript a check is simply a function of the outcome.
 
 ### Custom checks and invariants
 
@@ -159,9 +151,9 @@ Any `(outcome) => void` function is a check. `test.invariant(..)` registers one
 simulations), so a protocol invariant is written once and enforced everywhere:
 
 ```ts
-import { State, type Check } from "parallax-svm/kit";
+import { Account, type Check } from "parallax-svm/kit";
 
-const solvent: Check = State.with(PoolCodec, pool, p =>
+const solvent: Check = Account.state(PoolCodec, pool).with(p =>
   assert.ok(p.reserves >= p.obligations),
 );
 
@@ -187,7 +179,7 @@ client's codec plugs straight in:
 interface AccountCodec<Value, Address> {
   decode(bytes: Uint8Array): Value;      // on the body (post-discriminator)
   encode?(value: Value): ArrayLike<number>;
-  owner?: Address;                        // validated by read/State checks
+  owner?: Address;                        // validated by read/state checks
   discriminator?: Uint8Array;             // stripped before decode, framed by write
   size?: number;                          // minimum raw length
 }
@@ -196,11 +188,11 @@ const vaultState = test.read(VaultCodec, vault);   // codec first, then address
 test.write(VaultCodec, vault, { authority, amount: 1_000n });
 ```
 
-`read`, `write`, and the `State` checks validate `owner`, `discriminator`, and
+`read`, `write`, and the `Account.state` checks validate `owner`, `discriminator`, and
 `size` against the raw account before decoding, throwing precisely on any
 mismatch. This is the deliberate mirror of Rust: **TS codecs carry and validate
 `owner`** because generated bundles are self-framing, whereas Rust frames bytes
-only and keeps owner an orthogonal `Owner::eq` / `Owner.eq` check — available
+only and keeps owner an orthogonal `Account::owner` / `Account.owner` check — available
 standalone here too.
 
 `deriveAta(owner, mint, tokenProgram?)` (defaulting `tokenProgram` to `"legacy"`),

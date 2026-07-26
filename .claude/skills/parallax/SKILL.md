@@ -24,7 +24,7 @@ fn deposits(test: &mut Test) {
 
     test.send(DepositInstruction { user, amount: 1_000_000_000 })
         .succeeds()
-        .check([CuBudget::le(10_000), Lamports::eq(vault, 1_000_000_000)]);
+        .check([Cu::spent().le(10_000), Account::lamports(vault).eq(1_000_000_000)]);
 }
 ```
 
@@ -41,7 +41,7 @@ using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/my_program.so");
 const user = await test.add(wallet());
 test.send(await client.createDepositInstruction({ user, amount: 1_000_000_000n }))
     .succeeds()
-    .check(CuBudget.le(10_000n));
+    .check(Cu.spent().le(10_000n));
 ```
 
 The native kernel resolves from the installed platform package, or set
@@ -93,18 +93,21 @@ instruction chain, `…_with` variants take raw transaction-input accounts.
 test.send(withdraw)
     .succeeds()                          // .fails(ProgramError::…) / .fails_with(MyError::Code)
     .check([
-        CuBudget::le(20_000),            // eq/le/lt/ge/gt on all numeric facts
-        Lamports::eq(addr, n), Tokens::eq(addr, n), Supply::eq(mint, n),
-        Owner::eq(addr, program),
-        Data::eq(addr, bytes), ReturnData::eq(bytes),
+        Cu::spent().le(20_000),          // eq/le/lt/ge/gt on all numeric facts
+        Account::lamports(addr).eq(n),
+        Account::owner(addr).eq(program),
+        Account::data(addr).eq(bytes),
+        Token::amount(ata).eq(n), Token::supply(mint).eq(n),
+        ReturnData::eq(bytes),
         Changes::eq([user, vault]),      // exact changed set, in order
         Changes::created(vault),         // and removed(a) / closed(a)
     ])
-    .check(State::eq(vault, Vault { authority, amount: 600 }));  // typed, T inferred
+    .check(Account::state(vault).eq(Vault { authority, amount: 600 }));  // typed, T inferred
 ```
 
-TS mirrors every namespace (`CuBudget.le`, `Lamports.eq`, `State.eq(codec, addr, value)`,
-`Changes.eq([..])`). `State::with::<T>(addr, |s| ..)` asserts partial facts.
+TS mirrors every namespace (`Cu.spent().le`, `Account.lamports(a).eq`,
+`Account.state(codec, addr).eq(value)`, `Changes.eq([..])`).
+`Account::state(addr).with::<T>(|s| ..)` asserts partial facts.
 
 Reads (not asserts): `account(addr)`, `accounts()`, `logs()`, `return_value()`,
 `compute_units()`, `events(decode)`, `account_changes()`.
@@ -125,7 +128,7 @@ let s = test.read::<MyState>(addr);             // decode full account data
 
 Rust types derive wincode schemas; generated client account types frame their
 own discriminator. TS uses generated `{Name}Account` codec bundles:
-`test.read(VaultAccount, addr)` / `State.with(VaultAccount, addr, cb)`.
+`test.read(VaultAccount, addr)` / `Account.state(VaultAccount, addr).with(cb)`.
 
 ## Semantics you must not fight
 

@@ -7,14 +7,14 @@ import {
 } from "@solana/kit";
 import { Address as Web3Address } from "@solana/web3.js";
 import {
-  CuBudget as KCu,
-  Lamports as KLamports,
+  Account as KAccount,
+  Cu as KCu,
   Test as KitTest,
   wallet as kitWallet,
 } from "../src/kit.js";
 import {
-  CuBudget as WCu,
-  Lamports as WLamports,
+  Account as WAccount,
+  Cu as WCu,
   Test as Web3Test,
   wallet as web3Wallet,
 } from "../src/web3.js";
@@ -62,9 +62,9 @@ describe.skipIf(!programPath)("vault program parity", () => {
     const deposit = test
       .send(depositInstruction)
       .succeeds()
-      .check(KCu.le(1_556n))
-      .check(KLamports.eq(vault, depositAmount))
-      .check(KLamports.eq(user, startingLamports - depositAmount));
+      .check(KCu.spent().le(1_556n))
+      .check(KAccount.lamports(vault).eq(depositAmount))
+      .check(KAccount.lamports(user).eq(startingLamports - depositAmount));
     expect(deposit.accountChanges.map(change => change.address)).toEqual([
       user,
       vault,
@@ -93,10 +93,10 @@ describe.skipIf(!programPath)("vault program parity", () => {
         }),
       )
       .succeeds()
-      .check(KCu.le(1_600n))
-      .check(KLamports.eq(vault, depositAmount - withdrawalAmount))
+      .check(KCu.spent().le(1_600n))
+      .check(KAccount.lamports(vault).eq(depositAmount - withdrawalAmount))
       .check(
-        KLamports.eq(user, startingLamports - depositAmount + withdrawalAmount),
+        KAccount.lamports(user).eq(startingLamports - depositAmount + withdrawalAmount),
       );
     expect(test.lamports(vault)).toBe(depositAmount);
     expect(test.lamports(user)).toBe(startingLamports - depositAmount);
@@ -124,7 +124,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
         }),
       )
       .fails({ type: "InsufficientFunds" })
-      .check(KLamports.eq(vault, depositAmount));
+      .check(KAccount.lamports(vault).eq(depositAmount));
     test.warpToTimestamp(42n);
 
     using limited = await KitTest.open(PROGRAM_ADDRESS, elfPath, {
@@ -155,9 +155,9 @@ describe.skipIf(!programPath)("vault program parity", () => {
     const deposit = test
       .send(depositInstruction)
       .succeeds()
-      .check(WCu.le(1_556n))
-      .check(WLamports.eq(vault, depositAmount))
-      .check(WLamports.eq(user, startingLamports - depositAmount));
+      .check(WCu.spent().le(1_556n))
+      .check(WAccount.lamports(vault).eq(depositAmount))
+      .check(WAccount.lamports(user).eq(startingLamports - depositAmount));
     expect(deposit.accountChanges.map(change => change.address)).toEqual([
       user,
       vault,
@@ -189,10 +189,10 @@ describe.skipIf(!programPath)("vault program parity", () => {
         }),
       )
       .succeeds()
-      .check(WCu.le(1_600n))
-      .check(WLamports.eq(vault, depositAmount - withdrawalAmount))
+      .check(WCu.spent().le(1_600n))
+      .check(WAccount.lamports(vault).eq(depositAmount - withdrawalAmount))
       .check(
-        WLamports.eq(user, startingLamports - depositAmount + withdrawalAmount),
+        WAccount.lamports(user).eq(startingLamports - depositAmount + withdrawalAmount),
       );
     expect(test.lamports(vault)).toBe(depositAmount);
     expect(test.lamports(user)).toBe(startingLamports - depositAmount);
@@ -218,7 +218,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
         }),
       )
       .fails({ type: "InsufficientFunds" })
-      .check(WLamports.eq(vault, depositAmount));
+      .check(WAccount.lamports(vault).eq(depositAmount));
     test.warpToTimestamp(42n);
 
     using limited = await Web3Test.open(Web3VaultClient.programId, elfPath, {

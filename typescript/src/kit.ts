@@ -12,7 +12,7 @@ import {
   isSignerRole,
   isWritableRole,
   lamports,
-  type Account,
+  type Account as KitAccount,
   type Address,
   type Instruction,
 } from "@solana/kit";
@@ -55,7 +55,7 @@ export { DEFAULT_WALLET_LAMPORTS, TokenProgram };
 export type { ProgramError } from "./internal/outcome.js";
 export type { AssociatedTokenAccountOptions };
 
-type WorldAccount = Account<Uint8Array>;
+type WorldAccount = KitAccount<Uint8Array>;
 export type Fixture<Output> = SharedFixture<Output, Test>;
 export type Outcome = SharedOutcome<Address, WorldAccount>;
 export type AccountChange = SharedAccountChange<Address, WorldAccount>;
@@ -181,8 +181,7 @@ const adapter: HarnessAdapter<Address, WorldAccount, Instruction, Outcome> = {
 };
 
 /** The built-in fact namespaces for `check([..])` and `invariant(..)`. */
-export const { CuBudget, Lamports, Tokens, Supply, Owner, Data, ReturnData, State, Changes } =
-  createChecks(adapter);
+export const { Cu, Account, Token, ReturnData, Changes } = createChecks(adapter);
 
 /** An isolated fixture-first test world using Kit address and account types. */
 export class Test extends TestCore<Address, WorldAccount, Instruction, Outcome> {

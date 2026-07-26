@@ -190,7 +190,7 @@ impl Outcome {
 
     /// Run a reusable [`Check`](crate::Check) against this outcome. Chainable.
     ///
-    /// Accepts a built-in fact (`check([CuBudget::le(5_000), Lamports::eq(vault, n)])`),
+    /// Accepts a built-in fact (`check([Cu::spent().le(5_000), Account::lamports(vault).eq(n)])`),
     /// a struct implementing [`Check`](crate::Check), a closure, or an array
     /// or tuple of checks. For a check verified after *every* committed send,
     /// register it once with [`Test::invariant`](crate::Test::invariant)
@@ -244,7 +244,7 @@ pub(crate) fn mint_supply(account: &Account) -> u64 {
 mod tests {
     use {
         super::*,
-        crate::{Changes, CuBudget, Data, Lamports, Owner, ReturnData, State},
+        crate::{Changes, Cu, ReturnData},
     };
 
     fn outcome(logs: &[&str], compute_units: u64) -> Outcome {
@@ -283,18 +283,18 @@ mod tests {
     fn cu_comparators_cover_their_boundaries() {
         let ten = outcome(&[], 10);
         ten.check([
-            CuBudget::eq(10),
-            CuBudget::le(10),
-            CuBudget::lt(11),
-            CuBudget::ge(10),
-            CuBudget::gt(9),
+            Cu::spent().eq(10),
+            Cu::spent().le(10),
+            Cu::spent().lt(11),
+            Cu::spent().ge(10),
+            Cu::spent().gt(9),
         ]);
     }
 
     #[test]
     #[should_panic(expected = "compute units: expected <= 9, consumed 10")]
     fn cu_le_rejects_over_budget() {
-        outcome(&[], 10).check(CuBudget::le(9));
+        outcome(&[], 10).check(Cu::spent().le(9));
     }
 
     #[test]
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn from_fn_asserts_group_with_built_ins() {
         outcome(&[], 10).check([
-            CuBudget::le(10),
+            Cu::spent().le(10),
             crate::Assert::from_fn(|o| assert_eq!(o.compute_units(), 10)),
         ]);
     }
@@ -324,9 +324,9 @@ mod tests {
     fn check_accepts_facts_closures_and_arrays() {
         let ran = core::cell::Cell::new(false);
         outcome(&[], 10)
-            .check(CuBudget::eq(10))
+            .check(Cu::spent().eq(10))
             .check(|o: &Outcome| assert_eq!(o.compute_units(), 10))
-            .check([CuBudget::le(10), CuBudget::le(11)])
+            .check([Cu::spent().le(10), Cu::spent().le(11)])
             .check(|_: &Outcome| ran.set(true));
         assert!(ran.get(), "closure checks must run");
     }
@@ -368,8 +368,8 @@ mod tests {
         ));
 
         outcome.check([
-            State::eq(address, Counter { count: 7, tag: 3 }),
-            State::with::<Counter>(address, |value| assert_eq!(value.count, 7)),
+            Account::state(address).eq(Counter { count: 7, tag: 3 }),
+            Account::state(address).with::<Counter>(|value| assert_eq!(value.count, 7)),
         ]);
     }
 
@@ -381,9 +381,10 @@ mod tests {
         // Too few bytes for a Counter (needs nine), so the wincode decode fails.
         let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
 
-        outcome.check(State::with::<Counter>(address, |_| {
-            unreachable!("the decode fails before the check runs")
-        }));
+        outcome.check(
+            Account::state(address)
+                .with::<Counter>(|_| unreachable!("the decode fails before the check runs")),
+        );
     }
 
     #[test]
@@ -392,14 +393,17 @@ mod tests {
         let owner = Pubkey::new_from_array([9; 32]);
         let outcome = state_outcome(Account::new(address, owner, 42, Vec::new()));
 
-        outcome.check([Lamports::eq(address, 42), Lamports::ge(address, 40)]);
+        outcome.check([
+            Account::lamports(address).eq(42),
+            Account::lamports(address).ge(40),
+        ]);
     }
 
     #[test]
     #[should_panic(expected = "outcome does not contain account")]
     fn account_facts_name_a_missing_account() {
         let missing = Pubkey::new_from_array([8; 32]);
-        outcome(&[], 0).check(Lamports::eq(missing, 1));
+        outcome(&[], 0).check(Account::lamports(missing).eq(1));
     }
 
     #[test]
@@ -425,7 +429,7 @@ mod tests {
         let owner = Pubkey::new_from_array([9; 32]);
         let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
 
-        outcome.check(Data::eq(address, [1, 2, 3]));
+        outcome.check(Account::data(address).eq([1, 2, 3]));
     }
 
     #[test]
@@ -435,7 +439,7 @@ mod tests {
         let owner = Pubkey::new_from_array([9; 32]);
         let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
 
-        outcome.check(Data::eq(address, [1, 2]));
+        outcome.check(Account::data(address).eq([1, 2]));
     }
 
     #[test]
@@ -449,8 +453,8 @@ mod tests {
         ));
 
         outcome.check((
-            Owner::eq(address, owner),
-            State::with::<Counter>(address, |value| assert_eq!(value.count, 1)),
+            Account::owner(address).eq(owner),
+            Account::state(address).with::<Counter>(|value| assert_eq!(value.count, 1)),
         ));
     }
 
@@ -466,6 +470,6 @@ mod tests {
             &Counter { count: 1, tag: 0 },
         ));
 
-        outcome.check(Owner::eq(address, foreign));
+        outcome.check(Account::owner(address).eq(foreign));
     }
 }

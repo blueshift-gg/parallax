@@ -8,8 +8,8 @@
 //!
 //! ```rust,ignore
 //! test.send(deposit).succeeds().check([
-//!     CuBudget::le(5_000),
-//!     Lamports::eq(vault, amount),
+//!     Cu::spent().le(5_000),
+//!     Account::lamports(vault).eq(amount),
 //!     Changes::eq([signer, vault]),
 //!     Changes::created(vault),
 //! ]);
@@ -34,18 +34,25 @@ use {
 /// An assertion over an execution [`Outcome`], panicking with an actionable
 /// message when it does not hold.
 ///
-/// Built-in checks are constructed from the fact namespaces ([`CuBudget`],
-/// [`Lamports`], [`Tokens`], [`Supply`], [`State`], [`Data`], [`ReturnData`],
-/// [`Owner`], [`Changes`]). Closures, arrays, and tuples of checks all
-/// qualify, and applications implement the trait to name their own
-/// invariants:
+/// Built-in checks follow one shape — name the fact, bind its subject, then
+/// compare: [`Cu::spent`], [`Account::lamports`]/[`Account::owner`]/
+/// [`Account::data`]/[`Account::state`], [`Token::amount`]/[`Token::supply`],
+/// plus the transaction-scoped [`ReturnData`] and [`Changes`]. Closures,
+/// arrays, and tuples of checks all qualify, and applications implement the
+/// trait to name their own invariants:
+
+/// [`Account::lamports`]: crate::Account::lamports
+/// [`Account::owner`]: crate::Account::owner
+/// [`Account::data`]: crate::Account::data
+/// [`Account::state`]: crate::Account::state
 ///
 /// ```rust,ignore
 /// struct Solvent { pool: Pubkey }
 ///
 /// impl Check for Solvent {
 ///     fn check(&self, outcome: &Outcome) {
-///         State::with::<Pool>(self.pool, |p| assert!(p.reserves >= p.obligations))
+///         Account::state(self.pool)
+///             .with::<Pool>(|p| assert!(p.reserves >= p.obligations))
 ///             .check(outcome);
 ///     }
 /// }
@@ -147,7 +154,7 @@ impl AccountValue {
 
 /// A built-in check value. Every fact-namespace constructor returns this one
 /// concrete type, so heterogeneous facts group in a plain array:
-/// `check([CuBudget::le(5_000), Lamports::eq(vault, n)])`.
+/// `check([Cu::spent().le(5_000), Account::lamports(vault).eq(n)])`.
 pub struct Assert(Inner);
 
 impl Assert {
@@ -270,122 +277,155 @@ fn change(outcome: &Outcome, address: Pubkey) -> &crate::AccountChange {
         .unwrap_or_else(|| panic!("this transaction did not change account {address}"))
 }
 
-macro_rules! comparators {
-    ($namespace:ident, $doc:literal) => {
-        impl $namespace {
-            #[doc = concat!("Assert ", $doc, " equals `expected`.")]
-            pub fn eq(expected: u64) -> Assert {
-                Self::cmp(Cmp::Eq, expected)
-            }
+/// A bound numeric fact awaiting its comparator: `Account::lamports(vault)`
+/// yields a `Measure`, and `.eq(n)`/`.le(n)`/`.lt(n)`/`.ge(n)`/`.gt(n)`
+/// finish it into an [`Assert`].
+pub struct Measure(MeasureSource);
 
-            #[doc = concat!("Assert ", $doc, " is at most `expected`.")]
-            pub fn le(expected: u64) -> Assert {
-                Self::cmp(Cmp::Le, expected)
-            }
-
-            #[doc = concat!("Assert ", $doc, " is below `expected`.")]
-            pub fn lt(expected: u64) -> Assert {
-                Self::cmp(Cmp::Lt, expected)
-            }
-
-            #[doc = concat!("Assert ", $doc, " is at least `expected`.")]
-            pub fn ge(expected: u64) -> Assert {
-                Self::cmp(Cmp::Ge, expected)
-            }
-
-            #[doc = concat!("Assert ", $doc, " is above `expected`.")]
-            pub fn gt(expected: u64) -> Assert {
-                Self::cmp(Cmp::Gt, expected)
-            }
-        }
-    };
-    ($namespace:ident, $value:ident, $doc:literal) => {
-        impl $namespace {
-            #[doc = concat!("Assert ", $doc, " equals `expected`.")]
-            pub fn eq(address: Pubkey, expected: u64) -> Assert {
-                Self::cmp(address, Cmp::Eq, expected)
-            }
-
-            #[doc = concat!("Assert ", $doc, " is at most `expected`.")]
-            pub fn le(address: Pubkey, expected: u64) -> Assert {
-                Self::cmp(address, Cmp::Le, expected)
-            }
-
-            #[doc = concat!("Assert ", $doc, " is below `expected`.")]
-            pub fn lt(address: Pubkey, expected: u64) -> Assert {
-                Self::cmp(address, Cmp::Lt, expected)
-            }
-
-            #[doc = concat!("Assert ", $doc, " is at least `expected`.")]
-            pub fn ge(address: Pubkey, expected: u64) -> Assert {
-                Self::cmp(address, Cmp::Ge, expected)
-            }
-
-            #[doc = concat!("Assert ", $doc, " is above `expected`.")]
-            pub fn gt(address: Pubkey, expected: u64) -> Assert {
-                Self::cmp(address, Cmp::Gt, expected)
-            }
-        }
-
-        impl $namespace {
-            fn cmp(address: Pubkey, cmp: Cmp, expected: u64) -> Assert {
-                Assert(Inner::Account(AccountValue::$value, address, cmp, expected))
-            }
-        }
-    };
+enum MeasureSource {
+    Cu,
+    Account(AccountValue, Pubkey),
 }
 
-/// Compute-unit budget facts: `CuBudget::le(5_000)`.
-pub struct CuBudget;
+impl Measure {
+    fn finish(self, cmp: Cmp, expected: u64) -> Assert {
+        Assert(match self.0 {
+            MeasureSource::Cu => Inner::Cu(cmp, expected),
+            MeasureSource::Account(value, address) => Inner::Account(value, address, cmp, expected),
+        })
+    }
 
-impl CuBudget {
-    fn cmp(cmp: Cmp, expected: u64) -> Assert {
-        Assert(Inner::Cu(cmp, expected))
+    /// Assert the measured value equals `expected`.
+    pub fn eq(self, expected: u64) -> Assert {
+        self.finish(Cmp::Eq, expected)
+    }
+
+    /// Assert the measured value is at most `expected`.
+    pub fn le(self, expected: u64) -> Assert {
+        self.finish(Cmp::Le, expected)
+    }
+
+    /// Assert the measured value is below `expected`.
+    pub fn lt(self, expected: u64) -> Assert {
+        self.finish(Cmp::Lt, expected)
+    }
+
+    /// Assert the measured value is at least `expected`.
+    pub fn ge(self, expected: u64) -> Assert {
+        self.finish(Cmp::Ge, expected)
+    }
+
+    /// Assert the measured value is above `expected`.
+    pub fn gt(self, expected: u64) -> Assert {
+        self.finish(Cmp::Gt, expected)
     }
 }
 
-comparators!(CuBudget, "the transaction's consumed compute units");
+/// Compute-unit facts: `Cu::spent().le(5_000)`.
+pub struct Cu;
 
-/// Lamport-balance facts: `Lamports::eq(vault, 1_000_000_000)`.
-pub struct Lamports;
-comparators!(
-    Lamports,
-    Lamports,
-    "the resulting lamport balance of `address`"
-);
-
-/// Token-balance facts for Token or Token-2022 accounts:
-/// `Tokens::eq(ata, 500)`.
-pub struct Tokens;
-comparators!(Tokens, Tokens, "the resulting token balance of `address`");
-
-/// Mint-supply facts for Token or Token-2022 mints:
-/// `Supply::eq(mint, 1_000)`.
-pub struct Supply;
-comparators!(
-    Supply,
-    Supply,
-    "the resulting supply of the mint at `address`"
-);
-
-/// Account-ownership facts: `Owner::eq(vault, program_id)`.
-pub struct Owner;
-
-impl Owner {
-    /// Assert the resulting account at `address` is owned by `program`.
-    pub fn eq(address: Pubkey, program: Pubkey) -> Assert {
-        Assert(Inner::Owner(address, program))
+impl Cu {
+    /// The compute units the transaction consumed.
+    pub fn spent() -> Measure {
+        Measure(MeasureSource::Cu)
     }
 }
 
-/// Raw account-data facts: `Data::eq(config, [1, 0, 0, 0])`. The raw sibling
-/// of [`State`], for fixed byte images and accounts without a typed schema.
-pub struct Data;
+/// Token-program facts: `Token::amount(ata).ge(500)`,
+/// `Token::supply(mint).eq(1_000)`. Both read Token or Token-2022 accounts.
+pub struct Token;
 
-impl Data {
-    /// Assert the resulting account's exact raw data bytes.
-    pub fn eq(address: Pubkey, expected: impl Into<Vec<u8>>) -> Assert {
-        Assert(Inner::Data(address, expected.into()))
+impl Token {
+    /// The token balance of the token account at `address`.
+    pub fn amount(address: Pubkey) -> Measure {
+        Measure(MeasureSource::Account(AccountValue::Tokens, address))
+    }
+
+    /// The supply of the mint at `address`.
+    pub fn supply(address: Pubkey) -> Measure {
+        Measure(MeasureSource::Account(AccountValue::Supply, address))
+    }
+}
+
+/// The account-scoped facts, hung off the [`Account`](crate::Account) type
+/// itself: one noun installs raw accounts and measures them.
+impl crate::Account {
+    /// The lamport balance of the account at `address`.
+    pub fn lamports(address: Pubkey) -> Measure {
+        Measure(MeasureSource::Account(AccountValue::Lamports, address))
+    }
+
+    /// The owner of the account at `address`: `Account::owner(vault).eq(program_id)`.
+    pub fn owner(address: Pubkey) -> OwnerMeasure {
+        OwnerMeasure(address)
+    }
+
+    /// The raw data bytes of the account at `address` — the raw sibling of
+    /// [`Self::state`].
+    pub fn data(address: Pubkey) -> DataMeasure {
+        DataMeasure(address)
+    }
+
+    /// The typed state of the account at `address`, decoded through the
+    /// type's wincode schema — the same decode path as
+    /// [`Test::read`](crate::Test::read). Ownership is intentionally not
+    /// checked; pair with [`Self::owner`] when it matters.
+    pub fn state(address: Pubkey) -> StateMeasure {
+        StateMeasure(address)
+    }
+}
+
+/// A bound account-owner fact awaiting its expected program.
+pub struct OwnerMeasure(Pubkey);
+
+impl OwnerMeasure {
+    /// Assert the account is owned by `program`.
+    pub fn eq(self, program: Pubkey) -> Assert {
+        Assert(Inner::Owner(self.0, program))
+    }
+}
+
+/// A bound raw-data fact awaiting its expected bytes.
+pub struct DataMeasure(Pubkey);
+
+impl DataMeasure {
+    /// Assert the account's exact raw data bytes.
+    pub fn eq(self, expected: impl Into<Vec<u8>>) -> Assert {
+        Assert(Inner::Data(self.0, expected.into()))
+    }
+}
+
+/// A bound typed-state fact awaiting its expected value or closure.
+pub struct StateMeasure(Pubkey);
+
+impl StateMeasure {
+    /// Assert the account decodes to exactly `expected`:
+    /// `Account::state(vault).eq(Vault { authority, amount: 600 })`. `T` is
+    /// inferred from the value; failures print the full decoded/expected pair.
+    pub fn eq<T>(self, expected: T) -> Assert
+    where
+        T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T>
+            + PartialEq
+            + core::fmt::Debug
+            + 'static,
+    {
+        let address = self.0;
+        Assert(Inner::Dyn(Box::new(move |outcome| {
+            let actual = decode::<T>(outcome, address);
+            assert_eq!(actual, expected, "unexpected state for {address}");
+        })))
+    }
+
+    /// Assert on the decoded state with a closure, for partial or computed
+    /// facts: `Account::state(vault).with::<Vault>(|v| assert!(v.amount > 0))`.
+    pub fn with<T>(self, check: impl Fn(&T) + 'static) -> Assert
+    where
+        T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T> + 'static,
+    {
+        let address = self.0;
+        Assert(Inner::Dyn(Box::new(move |outcome| {
+            check(&decode::<T>(outcome, address));
+        })))
     }
 }
 
@@ -399,46 +439,12 @@ impl ReturnData {
     }
 }
 
-/// Typed account-state facts, decoded through `T`'s wincode schema — the same
-/// decode path as [`Test::read`](crate::Test::read). Ownership is
-/// intentionally not checked here; pair with [`Owner::eq`] when it matters.
-pub struct State;
-
-impl State {
-    /// Assert the account at `address` decodes to exactly `expected`:
-    /// `State::eq(vault, Vault { authority, amount: 600 })`. `T` is inferred
-    /// from the value; failures print the full decoded/expected pair.
-    pub fn eq<T>(address: Pubkey, expected: T) -> Assert
-    where
-        T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T>
-            + PartialEq
-            + core::fmt::Debug
-            + 'static,
-    {
-        Assert(Inner::Dyn(Box::new(move |outcome| {
-            let actual = decode::<T>(outcome, address);
-            assert_eq!(actual, expected, "unexpected state for {address}");
-        })))
-    }
-
-    /// Assert on the decoded state with a closure, for partial or computed
-    /// facts: `State::with::<Vault>(vault, |v| assert!(v.amount > 0))`.
-    pub fn with<T>(address: Pubkey, check: impl Fn(&T) + 'static) -> Assert
-    where
-        T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T> + 'static,
-    {
-        Assert(Inner::Dyn(Box::new(move |outcome| {
-            check(&decode::<T>(outcome, address));
-        })))
-    }
-}
-
 fn decode<T>(outcome: &Outcome, address: Pubkey) -> T
 where
     T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T>,
 {
     let account = required(outcome, address);
-    crate::world::decode::<T>("State", address, &account.data, 0)
+    crate::world::decode::<T>("state", address, &account.data, 0)
 }
 
 /// Changed-account facts, from the transaction's writable before/after set.

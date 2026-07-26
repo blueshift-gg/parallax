@@ -178,39 +178,43 @@ with actionable messages (and are chainable, returning `&Self`); reads return
 plain values or `Option`.
 
 The verdict is a method; every other assertion is a **check value** passed to
-`check` — one grammar, and a plain array groups heterogeneous facts:
+`check`. One shape — name the fact, bind its subject, then compare — and a
+plain array groups heterogeneous facts:
 
 ```rust,ignore
 test.send(withdraw)
     .succeeds()                                   // or: .fails(ProgramError::InsufficientFunds)
     .check([                                      //     .fails_with(VaultError::Unauthorized)
-        CuBudget::le(20_000),
-        Lamports::eq(recipient, 1_000_000),
-        Tokens::eq(vault, 600),
-        Supply::eq(mint, 1_000),
-        Owner::eq(vault, program_id),
+        Cu::spent().le(20_000),
+        Account::lamports(recipient).eq(1_000_000),
+        Account::owner(vault).eq(program_id),
+        Token::amount(user_ata).eq(600),
+        Token::supply(mint).eq(1_000),
         Changes::eq([user, vault]),               // the exact changed set, in order
         Changes::created(vault),
     ])
-    .check(State::eq(vault, VaultState { authority, amount: 600 }));
+    .check(Account::state(vault).eq(VaultState { authority, amount: 600 }));
 ```
 
-The fact namespaces and their constructors:
+The fact namespaces:
 
-| Namespace | Constructors |
+| Fact | Comparators |
 | --- | --- |
-| `CuBudget` | `eq, le, lt, ge, gt (n)` |
-| `Lamports` / `Tokens` | `eq, le, lt, ge, gt (addr, n)` |
-| `Supply` | `eq, le, lt, ge, gt (mint, n)` |
-| `State` | `eq(addr, value)` — typed, `T` inferred; `with::<T>(addr, \|s\| ..)` for partial facts |
-| `Data` / `ReturnData` | `eq(addr, bytes)` / `eq(bytes)` |
-| `Owner` | `eq(addr, program)` |
+| `Cu::spent()` | `eq, le, lt, ge, gt (n)` |
+| `Account::lamports(addr)` | `eq, le, lt, ge, gt (n)` |
+| `Account::owner(addr)` | `eq(program)` |
+| `Account::data(addr)` | `eq(bytes)` — the raw sibling of `state` |
+| `Account::state(addr)` | `eq(value)` — typed, `T` inferred; `with::<T>(\|s\| ..)` for partial facts |
+| `Token::amount(addr)` / `Token::supply(mint)` | `eq, le, lt, ge, gt (n)` |
+| `ReturnData` | `eq(bytes)` |
 | `Changes` | `eq([addrs])`, `created(addr)`, `removed(addr)`, `closed(addr)` |
 
 Every constructor returns the same concrete `Assert` type, which is why a
-plain array works. `State::eq` decodes through the type's wincode schema and
-fails with the full decoded/expected pair; `Changes::closed` asserts Solana's
-closed-account state (removed entirely, or retained empty and system-owned).
+plain array works. `Account::state(..).eq` decodes through the type's wincode
+schema and fails with the full decoded/expected pair; `Changes::closed`
+asserts Solana's closed-account state (removed entirely, or retained empty
+and system-owned). Mint supply lives under `Token` because the `Mint` name is
+the fixture's.
 
 ### Custom checks and invariants
 
@@ -224,7 +228,8 @@ struct Solvent { pool: Pubkey }
 
 impl Check for Solvent {
     fn check(&self, outcome: &Outcome) {
-        State::with::<Pool>(self.pool, |p| assert!(p.reserves >= p.obligations))
+        Account::state(self.pool)
+            .with::<Pool>(|p| assert!(p.reserves >= p.obligations))
             .check(outcome);
     }
 }
@@ -310,10 +315,10 @@ unconsumed tail must be **all zero** — Solana's zero-initialized reserved padd
 as a growable or migration-target account carries. A *non-zero* trailing byte is
 the fingerprint of the wrong or a stale type read against the account, and
 **panics** rather than silently returning a value decoded from a prefix. The same
-contract applies to `read_at`'s suffix and to the `State` checks.
+contract applies to `read_at`'s suffix and to the `Account::state` checks.
 
 **Owner is orthogonal in Rust.** A wincode read frames bytes only and never
-checks the account's owner, so pair it with `Owner::eq` when ownership matters.
+checks the account's owner, so pair it with `Account::owner` when ownership matters.
 This differs from TypeScript by design: there, codecs carry and validate `owner`
 because generated bundles are self-framing.
 

@@ -57,9 +57,7 @@ mod world;
 pub use dump::DumpPlan;
 
 pub use {
-    check::{
-        Assert, Changes, Check, CuBudget, Data, Lamports, Owner, ReturnData, State, Supply, Tokens,
-    },
+    check::{Assert, Changes, Check, Cu, Measure, ReturnData, Token},
     outcome::Outcome,
     parallax_svm_derive::parallax_test,
     setup::{SetupError, TestBuilder, PROGRAM_PATH_ENV},
@@ -105,9 +103,9 @@ pub mod prelude {
             Wallet,
         },
         parallax_test, system_program, Account, AccountChange, AccountMeta, Assert, Changes, Check,
-        CuBudget, Data, Instruction, Lamports, Outcome, Owner, ProgramError, Pubkey, ReturnData,
-        Snapshot, State, Supply, Test, Tokens, DEFAULT_WALLET_LAMPORTS,
-        SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
+        Cu, Instruction, Outcome, ProgramError, Pubkey, ReturnData, Snapshot, Test, Token,
+        DEFAULT_WALLET_LAMPORTS, SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID,
+        SPL_TOKEN_PROGRAM_ID,
     };
 }
 
@@ -119,7 +117,7 @@ mod tests {
             co_signers,
             fixture::{AssociatedTokenAccount, Fixture, Mint, TokenAccount, TokenProgram, Wallet},
             setup::resolve_program_path_from_named,
-            system_program, Account, AccountMeta, Changes, Check, Instruction, Lamports, Outcome,
+            system_program, Account, AccountMeta, Changes, Check, Instruction, Outcome,
             ProgramError, Pubkey, SetupError, Test, DEFAULT_WALLET_LAMPORTS,
             SPL_TOKEN_2022_PROGRAM_ID,
         },
@@ -541,7 +539,7 @@ mod tests {
         test.send(system_transfer(payer, recipient, amount))
             .succeeds()
             .check([
-                Lamports::eq(recipient, amount),
+                Account::lamports(recipient).eq(amount),
                 Changes::eq([payer, recipient]),
                 Changes::created(recipient),
             ]);
@@ -594,7 +592,7 @@ mod tests {
 
         test.send(transfer)
             .succeeds()
-            .check(Lamports::eq(cosigner, DEFAULT_WALLET_LAMPORTS));
+            .check(Account::lamports(cosigner).eq(DEFAULT_WALLET_LAMPORTS));
     }
 
     /// A named protocol invariant: `account` never holds more than `max`

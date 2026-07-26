@@ -7,51 +7,53 @@ import {
 } from "./outcome.js";
 
 /**
- * The built-in fact namespaces, mirroring Rust's `Assert` constructors: every
- * value is a plain `Check` function, so heterogeneous facts group in an array
- * — `check([CuBudget.le(5_000), Lamports.eq(vault, n)])`.
+ * The built-in fact namespaces, mirroring Rust: name the fact, bind its
+ * subject, then compare — `check([Cu.spent().le(5_000),
+ * Account.lamports(vault).eq(n)])`. Every value is a plain `Check` function,
+ * so heterogeneous facts group in an array.
  */
 export interface Checks<Address, Account> {
-  /** Compute-unit budget facts: `CuBudget.le(5_000)`. */
-  readonly CuBudget: Comparators<Address, Account>;
-  /** Lamport-balance facts: `Lamports.eq(vault, amount)`. */
-  readonly Lamports: AccountComparators<Address, Account>;
-  /** Token-balance facts for Token or Token-2022 accounts. */
-  readonly Tokens: AccountComparators<Address, Account>;
-  /** Mint-supply facts for Token or Token-2022 mints. */
-  readonly Supply: AccountComparators<Address, Account>;
-  /** Account-ownership facts: `Owner.eq(vault, programId)`. */
-  readonly Owner: {
-    eq(address: Address, program: Address): Check<Address, Account>;
+  /** Compute-unit facts: `Cu.spent().le(5_000)`. */
+  readonly Cu: {
+    /** The compute units the transaction consumed. */
+    spent(): Comparators<Address, Account>;
   };
-  /** Raw account-data facts — the raw sibling of `State`. */
-  readonly Data: {
-    eq(
+  /** Account-scoped facts: lamports, owner, raw data, and typed state. */
+  readonly Account: {
+    /** The lamport balance of the account at `address`. */
+    lamports(address: Address): Comparators<Address, Account>;
+    /** The owner of the account: `Account.owner(vault).eq(programId)`. */
+    owner(address: Address): {
+      eq(program: Address): Check<Address, Account>;
+    };
+    /** The raw data bytes of the account — the raw sibling of `state`. */
+    data(address: Address): {
+      eq(expected: Uint8Array | readonly number[]): Check<Address, Account>;
+    };
+    /**
+     * The typed state of the account, decoded through a generated codec — the
+     * same validate-and-decode path as `Test.read`.
+     */
+    state<Value>(
+      codec: AccountCodec<Value, Address>,
       address: Address,
-      expected: Uint8Array | readonly number[],
-    ): Check<Address, Account>;
+    ): {
+      /** Assert the account decodes to exactly `expected` (deep equality). */
+      eq(expected: Value): Check<Address, Account>;
+      /** Assert on the decoded state with a closure, for partial facts. */
+      with(check: (state: Value) => void): Check<Address, Account>;
+    };
+  };
+  /** Token-program facts; both read Token or Token-2022 accounts. */
+  readonly Token: {
+    /** The token balance of the token account at `address`. */
+    amount(address: Address): Comparators<Address, Account>;
+    /** The supply of the mint at `address`. */
+    supply(address: Address): Comparators<Address, Account>;
   };
   /** Transaction return-data facts. */
   readonly ReturnData: {
     eq(expected: Uint8Array | readonly number[]): Check<Address, Account>;
-  };
-  /**
-   * Typed account-state facts, decoded through a generated codec — the same
-   * validate-and-decode path as `Test.read`.
-   */
-  readonly State: {
-    /** Assert the account decodes to exactly `expected` (deep equality). */
-    eq<Value>(
-      codec: AccountCodec<Value, Address>,
-      address: Address,
-      expected: Value,
-    ): Check<Address, Account>;
-    /** Assert on the decoded state with a closure, for partial facts. */
-    with<Value>(
-      codec: AccountCodec<Value, Address>,
-      address: Address,
-      check: (state: Value) => void,
-    ): Check<Address, Account>;
   };
   /** Changed-account facts, from the transaction's writable before/after set. */
   readonly Changes: {
@@ -66,20 +68,13 @@ export interface Checks<Address, Account> {
   };
 }
 
+/** A bound numeric fact awaiting its comparator. */
 export interface Comparators<Address, Account> {
   eq(expected: bigint | number): Check<Address, Account>;
   le(expected: bigint | number): Check<Address, Account>;
   lt(expected: bigint | number): Check<Address, Account>;
   ge(expected: bigint | number): Check<Address, Account>;
   gt(expected: bigint | number): Check<Address, Account>;
-}
-
-export interface AccountComparators<Address, Account> {
-  eq(address: Address, expected: bigint | number): Check<Address, Account>;
-  le(address: Address, expected: bigint | number): Check<Address, Account>;
-  lt(address: Address, expected: bigint | number): Check<Address, Account>;
-  ge(address: Address, expected: bigint | number): Check<Address, Account>;
-  gt(address: Address, expected: bigint | number): Check<Address, Account>;
 }
 
 type Op = "==" | "<=" | "<" | ">=" | ">";
@@ -173,54 +168,45 @@ export function createChecks<Address, Account>(
 
   const comparators = (
     label: string,
-    read: (outcome: O, address: Address) => bigint,
-  ): AccountComparators<Address, Account> => {
+    read: (outcome: O) => bigint,
+  ): Comparators<Address, Account> => {
     const make =
       (op: Op) =>
-      (address: Address, expected: bigint | number): C =>
+      (expected: bigint | number): C =>
       outcome => {
-        const actual = read(outcome, address);
+        const actual = read(outcome);
         if (!HOLDS[op](actual, BigInt(expected))) {
           throw new Error(
-            `${label} of ${adapter.renderAddress(address)}: expected ${op} ${expected}, got ${actual}`,
+            `${label}: expected ${op} ${expected}, got ${actual}`,
           );
         }
       };
-    return { eq: make("=="), le: make("<="), lt: make("<"), ge: make(">="), gt: make(">") };
+    return {
+      eq: make("=="),
+      le: make("<="),
+      lt: make("<"),
+      ge: make(">="),
+      gt: make(">"),
+    };
   };
 
-  const cuMake =
-    (op: Op) =>
-    (expected: bigint | number): C =>
-    outcome => {
-      if (!HOLDS[op](outcome.computeUnits, BigInt(expected))) {
-        throw new Error(
-          `compute units: expected ${op} ${expected}, consumed ${outcome.computeUnits}`,
-        );
-      }
-    };
+  const accountValue = (
+    label: string,
+    read: (account: Account) => bigint,
+  ) => (address: Address) =>
+    comparators(`${label} of ${adapter.renderAddress(address)}`, outcome =>
+      read(requiredAccount(outcome, address)),
+    );
 
   return {
-    CuBudget: {
-      eq: cuMake("=="),
-      le: cuMake("<="),
-      lt: cuMake("<"),
-      ge: cuMake(">="),
-      gt: cuMake(">"),
+    Cu: {
+      spent: () =>
+        comparators("compute units", outcome => outcome.computeUnits),
     },
-    Lamports: comparators("lamports", (outcome, address) =>
-      adapter.lamports(requiredAccount(outcome, address)),
-    ),
-    Tokens: comparators("token balance", (outcome, address) =>
-      adapter.tokenAmount(requiredAccount(outcome, address)),
-    ),
-    Supply: comparators("mint supply", (outcome, address) =>
-      adapter.mintSupply(requiredAccount(outcome, address)),
-    ),
-    Owner: {
-      eq:
-        (address, program): C =>
-        outcome => {
+    Account: {
+      lamports: accountValue("lamports", adapter.lamports),
+      owner: address => ({
+        eq: (program): C => outcome => {
           const owner = adapter.accountOwner(requiredAccount(outcome, address));
           if (adapter.addressKey(owner) !== adapter.addressKey(program)) {
             throw new Error(
@@ -228,11 +214,9 @@ export function createChecks<Address, Account>(
             );
           }
         },
-    },
-    Data: {
-      eq:
-        (address, expected): C =>
-        outcome => {
+      }),
+      data: address => ({
+        eq: (expected): C => outcome => {
           const data = adapter.accountData(requiredAccount(outcome, address));
           if (!bytesEqual(data, expected)) {
             throw new Error(
@@ -240,22 +224,9 @@ export function createChecks<Address, Account>(
             );
           }
         },
-    },
-    ReturnData: {
-      eq:
-        (expected): C =>
-        outcome => {
-          if (!bytesEqual(outcome.returnData, expected)) {
-            throw new Error(
-              `unexpected return data: expected ${describeBytes(expected)}, got ${describeBytes(outcome.returnData)}`,
-            );
-          }
-        },
-    },
-    State: {
-      eq:
-        (codec, address, expected): C =>
-        outcome => {
+      }),
+      state: (codec, address) => ({
+        eq: (expected): C => outcome => {
           const actual = decodeAccount(
             codec,
             address,
@@ -268,9 +239,7 @@ export function createChecks<Address, Account>(
             );
           }
         },
-      with:
-        (codec, address, check): C =>
-        outcome => {
+        with: (check): C => outcome => {
           check(
             decodeAccount(
               codec,
@@ -280,56 +249,62 @@ export function createChecks<Address, Account>(
             ),
           );
         },
+      }),
+    },
+    Token: {
+      amount: accountValue("token balance", adapter.tokenAmount),
+      supply: accountValue("mint supply", adapter.mintSupply),
+    },
+    ReturnData: {
+      eq: (expected): C => outcome => {
+        if (!bytesEqual(outcome.returnData, expected)) {
+          throw new Error(
+            `unexpected return data: expected ${describeBytes(expected)}, got ${describeBytes(outcome.returnData)}`,
+          );
+        }
+      },
     },
     Changes: {
-      eq:
-        (addresses): C =>
-        outcome => {
-          const actual = outcome.accountChanges.map(change =>
-            adapter.addressKey(change.address),
+      eq: (addresses): C => outcome => {
+        const actual = outcome.accountChanges.map(change =>
+          adapter.addressKey(change.address),
+        );
+        const expected = addresses.map(address => adapter.addressKey(address));
+        if (
+          actual.length !== expected.length ||
+          actual.some((key, index) => key !== expected[index])
+        ) {
+          throw new Error(
+            `unexpected changed-account set (first-appearance order): expected [${addresses
+              .map(address => adapter.renderAddress(address))
+              .join(", ")}], got [${outcome.accountChanges
+              .map(change => adapter.renderAddress(change.address))
+              .join(", ")}]`,
           );
-          const expected = addresses.map(address => adapter.addressKey(address));
-          if (
-            actual.length !== expected.length ||
-            actual.some((key, index) => key !== expected[index])
-          ) {
-            throw new Error(
-              `unexpected changed-account set (first-appearance order): expected [${addresses
-                .map(address => adapter.renderAddress(address))
-                .join(", ")}], got [${outcome.accountChanges
-                .map(change => adapter.renderAddress(change.address))
-                .join(", ")}]`,
-            );
-          }
-        },
-      created:
-        (address): C =>
-        outcome => {
-          if (!requiredChange(outcome, address).wasCreated()) {
-            throw new Error(
-              `account ${adapter.renderAddress(address)} was not created by this transaction`,
-            );
-          }
-        },
-      removed:
-        (address): C =>
-        outcome => {
-          if (!requiredChange(outcome, address).wasRemoved()) {
-            throw new Error(
-              `account ${adapter.renderAddress(address)} was not removed by this transaction`,
-            );
-          }
-        },
-      closed:
-        (address): C =>
-        outcome => {
-          const account = outcome.account(address);
-          if (account !== null && !adapter.isClosed(account)) {
-            throw new Error(
-              `account ${adapter.renderAddress(address)} is not closed`,
-            );
-          }
-        },
+        }
+      },
+      created: (address): C => outcome => {
+        if (!requiredChange(outcome, address).wasCreated()) {
+          throw new Error(
+            `account ${adapter.renderAddress(address)} was not created by this transaction`,
+          );
+        }
+      },
+      removed: (address): C => outcome => {
+        if (!requiredChange(outcome, address).wasRemoved()) {
+          throw new Error(
+            `account ${adapter.renderAddress(address)} was not removed by this transaction`,
+          );
+        }
+      },
+      closed: (address): C => outcome => {
+        const account = outcome.account(address);
+        if (account !== null && !adapter.isClosed(account)) {
+          throw new Error(
+            `account ${adapter.renderAddress(address)} is not closed`,
+          );
+        }
+      },
     },
   };
 }
