@@ -211,7 +211,7 @@ is faster still, skipping the base58 round-trip a Kit `Address` pays.
 - [`docs/rust_reference.md`](docs/rust_reference.md) — the Rust API.
 - [`docs/typescript_reference.md`](docs/typescript_reference.md) — the Kit and
   Web3.js API.
-- [`SKILL.md`](SKILL.md) — instructions for AI agents using Parallax.
+- [`.claude/skills/parallax/`](.claude/skills/parallax/SKILL.md) — an agent skill: using Parallax, plus a smoke driver for the harness itself.
 
 ## License
 

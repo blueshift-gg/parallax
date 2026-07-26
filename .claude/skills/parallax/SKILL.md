@@ -1,6 +1,6 @@
 ---
 name: parallax
-description: Test Solana programs with Parallax, the fixture-based LiteSVM harness — world setup, sending instructions, asserting outcomes, dumping mainnet state, from Rust or TypeScript.
+description: Use, run, build, or test Parallax — the fixture-based LiteSVM harness for Solana programs. Covers writing tests with it (fixtures, send, outcomes, mainnet dumps, Rust or TypeScript) and verifying the harness itself via the smoke driver.
 ---
 
 # Testing Solana programs with Parallax
@@ -8,6 +8,17 @@ description: Test Solana programs with Parallax, the fixture-based LiteSVM harne
 Use this skill when writing or fixing tests for a Solana program with the
 `parallax-svm` crate (Rust) or `parallax-svm` npm package (Kit/Web3.js). The
 APIs mirror each other; anything shown in one language exists in the other.
+
+## Working on Parallax itself? Run the smoke driver first
+
+```bash
+bash .claude/skills/parallax/smoke.sh
+```
+
+It runs the Rust suites, builds the FFI kernel dylib, and runs the TypeScript
+fixture harness against it (no program artifact needed — program-less worlds).
+Set `PARALLAX_PROGRAM_PATH=<a compiled .so>` to extend it to the program-parity
+suites. Ends with `SMOKE OK` when the harness is healthy on this machine.
 
 ## Rust: the golden path
 
