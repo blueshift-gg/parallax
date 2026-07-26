@@ -3,8 +3,8 @@
 The full TypeScript surface — Kit and Web3.js. The
 [package README](../README.md) is the tour; this is the manual. The shared model
 and its guarantees live with the [Rust harness](../../README.md) and in
-[`docs/design.md`](../../docs/design.md); the Rust API mirror is in
-[`docs/reference.md`](../../docs/reference.md).
+the [Guarantees](rust_reference.md#guarantees) section of the Rust
+reference; the Rust API mirror is in [`docs/rust_reference.md`](rust_reference.md).
 
 Import from `parallax-svm/kit` for Kit's `Address`/`Account` types, or
 `parallax-svm/web3.js` for the Web3.js equivalents; the API is otherwise
@@ -86,8 +86,7 @@ implementing `Fixture` (an `install(test)` method).
 `dump` copies real mainnet accounts into the world through the committed
 `.parallax/` store — warm runs are fully offline and deterministic, and the
 network is touched only on a miss (one batched fetch at one slot). See
-[`docs/design.md`](../../docs/design.md) and
-[`docs/reference.md`](../../docs/reference.md#dump--load-real-state) for the store
+[`docs/rust_reference.md`](rust_reference.md#dump--load-real-state) for the store
 mechanics.
 
 ```ts

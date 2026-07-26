@@ -41,11 +41,11 @@ kernel.
 
 ## Documentation
 
-- **[reference](docs/reference.md)** — the full TypeScript surface: opening a
+- **[reference](../docs/typescript_reference.md)** — the full TypeScript surface: opening a
   world, fixtures, dump/load, outcomes, the `AccountCodec`, native-library
   resolution.
 - **[root README](../README.md)** — the shared model and the pitch.
-- **[design & guarantees](../docs/design.md)** — determinism, the zero-fee model,
+- **[design & guarantees](../docs/rust_reference.md#guarantees)** — determinism, the zero-fee model,
   spoofed signers, backfill.
 
 Licensed under either of Apache-2.0 or MIT at your option.

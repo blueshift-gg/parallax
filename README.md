@@ -112,7 +112,7 @@ let mint = test.add(
 
 Built-ins are `Wallet`, `Mint`, `TokenAccount`, `AssociatedTokenAccount`,
 `Account`, and `Program`; the full catalog — plurals, application fixtures — is in
-the [reference](docs/reference.md#fixtures-are-values).
+the [reference](docs/rust_reference.md#fixtures-are-values).
 
 ### Dump real mainnet state
 
@@ -148,7 +148,7 @@ for change in out.account_changes() {     // writable before/after, first-appear
 ```
 
 `send` commits, `simulate` does not; each has an `_all` (chain) and a `_with` (raw
-inputs) variant. Full surface in the [reference](docs/reference.md#outcomes).
+inputs) variant. Full surface in the [reference](docs/rust_reference.md#outcomes).
 
 ### Typed state
 
@@ -164,7 +164,7 @@ assert_eq!(state.amount, 1_000);
 
 `has_state::<T>(addr, check)` asserts on decoded state inline. The trailing-bytes
 rule and the Rust/TS owner asymmetry are in the
-[reference](docs/reference.md#typed-state-is-wincode-native).
+[reference](docs/rust_reference.md#typed-state-is-wincode-native).
 
 ### Adversarial testing
 
@@ -208,13 +208,10 @@ is faster still, skipping the base58 round-trip a Kit `Address` pays.
 
 ## Documentation
 
-- **[docs/reference.md](docs/reference.md)** — the full Rust API: fixtures,
-  dump/load, outcomes, typed state, program loading.
-- **[docs/design.md](docs/design.md)** — the harness contracts (determinism, zero
-  fees, backfill) and the design rules that double as the contribution bar.
-- **[typescript/README.md](typescript/README.md)** — the Kit and Web3.js harness,
-  with its own [reference](typescript/docs/reference.md). API docs land on docs.rs
-  and npm once published.
+- [`docs/rust_reference.md`](docs/rust_reference.md) — the Rust API.
+- [`docs/typescript_reference.md`](docs/typescript_reference.md) — the Kit and
+  Web3.js API.
+- [`SKILL.md`](SKILL.md) — instructions for AI agents using Parallax.
 
 ## License
 

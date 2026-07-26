@@ -2,9 +2,9 @@
 
 The full API surface of the Rust harness. The [README](../README.md) is the
 tour; this is the manual. The TypeScript surface is documented in
-[`typescript/docs/reference.md`](../typescript/docs/reference.md), and the
+[`docs/typescript_reference.md`](typescript_reference.md), and the
 harness contracts — determinism, the zero-fee model, backfill — in
-[`docs/design.md`](design.md).
+the [Guarantees](#guarantees) section below.
 
 Everything here is reached through the prelude:
 
@@ -278,10 +278,35 @@ token_program)` derives an associated-token address without installing it.
 - The primary program under test needs none of these — `#[parallax_test]` and
   `Test::builder` load it for you.
 
+## Guarantees
+
+- **Zero fees.** The runtime charges no signature or write-lock fees. A balance
+  only moves when a program moves it.
+- **Spoofed signers need no keypairs.** Signature checks are relaxed, so a test
+  names any address as a signer without producing a key. A permissionless
+  transaction borrows an inert internal fee payer.
+- **Signer backfill vs. init targets (the writable-first rule).** An account a
+  transaction names but the world never installed is filled in on `send` by a
+  single rule, checking *writable first*: a **writable** account is an init
+  target and enters **empty** (even when it also signs — a keypair account
+  creating itself); a **read-only signer** (a co-signer, e.g. a multisig member)
+  enters **funded**. Actors that pay are world state — install them with
+  `Wallet`.
+- **Byte-identical determinism.** Two fresh worlds running the identical scenario
+  produce byte-identical results — the same `Outcome` (error, compute units,
+  logs, return data, account changes) and the same post-state bytes. The backend
+  seeds a fixed genesis blockhash and a zero-timestamp clock (no wall-clock, no
+  RNG); fixture placement follows a per-world deterministic address sequence; and
+  every observable ordering is first-appearance, never hash-map iteration. Both
+  harness test suites assert this against two worlds.
+- **Cross-harness fixture addresses.** The deterministic address sequence is
+  identical across the Rust, Kit, and Web3.js harnesses, so a fixture address one
+  computes matches the others'.
+- **Explicit time control.** `warp_to_timestamp(ts)` sets the clock's Unix
+  timestamp alone; `sync_clock` (via a `Dump`) adopts a dumped mainnet slot *and*
+  a timestamp derived from it. Nothing advances the clock implicitly.
+
 ## See also
 
-- [`docs/design.md`](design.md) — the harness contracts: determinism, zero fees,
-  spoofed signers, the writable-first backfill rule, and the design rules that
-  double as the contribution bar.
-- [`typescript/docs/reference.md`](../typescript/docs/reference.md) — the same
-  surface from Kit and Web3.js.
+- [`docs/typescript_reference.md`](typescript_reference.md) — the same surface
+  from Kit and Web3.js.
