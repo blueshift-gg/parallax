@@ -479,42 +479,37 @@ export class TestCore<Address, Account, Instruction, Output> {
     this.#invariants.push(...(Array.isArray(check) ? check : [check]));
   }
 
-  send(instruction: Instruction): Output {
-    return this.#execute([instruction], [], true);
+  /**
+   * Execute and commit one transaction: a single instruction or a chain as an
+   * array. Mirrors Rust `Test::execute`.
+   */
+  execute(instructions: Instruction | readonly Instruction[]): Output {
+    return this.#execute(this.#chain(instructions), [], true);
   }
 
-  sendAll(instructions: readonly Instruction[]): Output {
-    return this.#execute([...instructions], [], true);
-  }
-
-  sendWith(instruction: Instruction, accounts: readonly Account[]): Output {
-    return this.#execute([instruction], [...accounts], true);
-  }
-
-  sendAllWith(
-    instructions: readonly Instruction[],
+  /** Execute and commit with raw transaction-input accounts. */
+  executeWith(
+    instructions: Instruction | readonly Instruction[],
     accounts: readonly Account[],
   ): Output {
-    return this.#execute([...instructions], [...accounts], true);
+    return this.#execute(this.#chain(instructions), [...accounts], true);
   }
 
-  simulate(instruction: Instruction): Output {
-    return this.#execute([instruction], [], false);
+  /** Execute one transaction without committing its changes. */
+  simulate(instructions: Instruction | readonly Instruction[]): Output {
+    return this.#execute(this.#chain(instructions), [], false);
   }
 
-  simulateWith(instruction: Instruction, accounts: readonly Account[]): Output {
-    return this.#execute([instruction], [...accounts], false);
-  }
-
-  simulateAll(instructions: readonly Instruction[]): Output {
-    return this.#execute([...instructions], [], false);
-  }
-
-  simulateAllWith(
-    instructions: readonly Instruction[],
+  /** Simulate with raw transaction-input accounts, committing nothing. */
+  simulateWith(
+    instructions: Instruction | readonly Instruction[],
     accounts: readonly Account[],
   ): Output {
-    return this.#execute([...instructions], [...accounts], false);
+    return this.#execute(this.#chain(instructions), [...accounts], false);
+  }
+
+  #chain(instructions: Instruction | readonly Instruction[]): Instruction[] {
+    return Array.isArray(instructions) ? [...instructions] : [instructions as Instruction];
   }
 
   free(): void {

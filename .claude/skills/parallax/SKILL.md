@@ -22,7 +22,7 @@ use parallax_svm::prelude::*;
 fn deposits(test: &mut Test) {
     let user = test.add(Wallet::account());
 
-    test.send(DepositInstruction { user, amount: 1_000_000_000 })
+    test.execute(DepositInstruction { user, amount: 1_000_000_000 })
         .succeeds()
         .checks([Cu::spent(|cu| cu <= 10_000), Account::lamports(vault, 1_000_000_000)]);
 }
@@ -39,7 +39,7 @@ import { Test, wallet } from "parallax-svm/kit"; // or parallax-svm/web3.js
 
 using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/my_program.so");
 const user = await test.add(wallet());
-test.send(await client.createDepositInstruction({ user, amount: 1_000_000_000n }))
+test.execute(await client.createDepositInstruction({ user, amount: 1_000_000_000n }))
     .succeeds()
     .check(Cu.spent(cu => cu <= 10_000n));
 ```
@@ -87,14 +87,14 @@ TS: `dump({ accounts })`, `dump.program(id)`, `load({ path })`.
 
 ## Asserting
 
-Chain off `send`/`simulate` — an unasserted `Outcome` is a compile error in
-Rust. `send` commits, `simulate` never does; `…_all` variants run an atomic
+Chain off `execute`/`simulate` — an unasserted `Outcome` is a compile error in
+Rust. `execute` commits, `simulate` never does; `…_all` variants run an atomic
 instruction chain, `…_with` variants take raw transaction-input accounts.
 
 **The verdict is a method; every fact is a check value.** One grammar:
 
 ```rust
-test.send(withdraw)
+test.execute(withdraw)
     .succeeds()                          // .fails(ProgramError::…) / .fails_with(MyError::Code)
     .checks([
         Cu::spent(|cu| cu <= 20_000),    // value ⇒ equality, closure ⇒ predicate
@@ -119,7 +119,7 @@ Reads (not asserts): `account(addr)`, `accounts()`, `logs()`, `return_value()`,
 `compute_units()`, `events(decode)`, `account_changes()`.
 
 **Invariants.** Register any check — built-in, closure, or your own `Check`
-struct — to run after every committed send (never on simulations):
+struct — to run after every committed execution (never on simulations):
 
 ```rust
 test.invariant(Solvent { pool });        // enforced on every send from here on

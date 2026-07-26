@@ -105,13 +105,9 @@ Any `.parallax/` file is a shareable dump artifact `load` reads by path.
 
 ## Outcomes
 
-`send` and `simulate`, each with an `…All` (instruction-chain) and a `…With`
-(explicit-input) variant, return an `Outcome`:
-
-|            | one              | chain              | + explicit inputs                  |
-| ---------- | ---------------- | ------------------ | ---------------------------------- |
-| commit     | `send`           | `sendAll`          | `sendWith` / `sendAllWith`         |
-| simulate   | `simulate`       | `simulateAll`      | `simulateWith` / `simulateAllWith` |
+`execute` commits; `simulate` never does. Both take a single instruction or an
+array chain, with `executeWith`/`simulateWith` variants for raw
+transaction-input accounts. Every execution returns an `Outcome`:
 
 Assertions throw with actionable messages and chain (`return this`); reads return
 plain values or `null`:
@@ -123,7 +119,7 @@ equality, a function is a predicate:
 ```ts
 import { Account, bundle, Cu, Mint, TokenAccount } from "parallax-svm/kit";
 
-test.send(withdraw).succeeds().checks([
+test.execute(withdraw).succeeds().checks([
   Cu.spent(cu => cu <= 20_000n),
   Account.lamports(recipient, 1_000_000n),
   Account.lamports(user, x => x > 0n),
@@ -143,14 +139,14 @@ one, and any `(tx) => void` closure is a custom check. `fails(..)` /
 ### Bundles and invariants
 
 `test.invariant(..)` registers any check — fact, bundle, or closure — to run
-after every *successful* committed send (failed sends and simulations never
+after every *successful* committed execution (failed sends and simulations never
 run invariants):
 
 ```ts
 const solvent = Account.data(PoolCodec, pool, p => p.reserves >= p.obligations);
 
 test.invariant(solvent);                       // every send now enforces it
-test.send(swap).succeeds().check(tx => assert.equal(tx.logs.length, 3));
+test.execute(swap).succeeds().check(tx => assert.equal(tx.logs.length, 3));
 ```
 
 An invariant sees each send's witness, so the accounts it judges must be part

@@ -21,7 +21,7 @@ use {
 /// #[parallax_test]
 /// fn initializes(test: &mut Test) {
 ///     let authority = test.add(Wallet::account());
-///     test.send(InitializeInstruction { authority }).succeeds();
+///     test.execute(InitializeInstruction { authority }).succeeds();
 /// }
 /// ```
 ///

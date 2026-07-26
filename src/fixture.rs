@@ -559,7 +559,7 @@ impl Fixture for AssociatedTokenAccount {
 ///     // Fetched once at one slot, then served from `.parallax/` offline.
 ///     let [pool, oracle] = test.add(Dump::accounts([POOL, ORACLE]));
 ///     test.add(Dump::program(AMM_PROGRAM));
-///     test.send(SwapInstruction { pool, oracle }).succeeds();
+///     test.execute(SwapInstruction { pool, oracle }).succeeds();
 /// }
 /// ```
 ///

@@ -635,7 +635,7 @@ mod bench {
             ],
             data: ix_data,
         };
-        test.send(ix)
+        test.execute(ix)
     }
 
     #[test]

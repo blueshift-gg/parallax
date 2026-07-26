@@ -11,6 +11,55 @@ use {
     wincode::{config::DefaultConfig, SchemaRead, SchemaWrite},
 };
 
+/// Anything executable as one transaction: a single instruction builder, or a
+/// chain as a tuple, array, or `Vec` — `test.execute((deposit, withdraw))`.
+/// The `M` marker only steers inference; call sites never name it.
+pub trait IntoInstructions<M> {
+    /// The transaction's instructions, in order.
+    fn into_instructions(self) -> Vec<Instruction>;
+}
+
+/// Marker for a single instruction.
+pub struct One;
+
+/// Marker for an instruction chain.
+pub struct Many;
+
+impl<T: Into<Instruction>> IntoInstructions<One> for T {
+    fn into_instructions(self) -> Vec<Instruction> {
+        vec![self.into()]
+    }
+}
+
+impl<T: Into<Instruction>, const N: usize> IntoInstructions<Many> for [T; N] {
+    fn into_instructions(self) -> Vec<Instruction> {
+        self.into_iter().map(Into::into).collect()
+    }
+}
+
+impl<T: Into<Instruction>> IntoInstructions<Many> for Vec<T> {
+    fn into_instructions(self) -> Vec<Instruction> {
+        self.into_iter().map(Into::into).collect()
+    }
+}
+
+macro_rules! impl_into_instructions_for_tuple {
+    ($($name:ident),+) => {
+        impl<$($name: Into<Instruction>),+> IntoInstructions<Many> for ($($name,)+) {
+            fn into_instructions(self) -> Vec<Instruction> {
+                #[allow(non_snake_case)]
+                let ($($name,)+) = self;
+                vec![$($name.into()),+]
+            }
+        }
+    };
+}
+
+impl_into_instructions_for_tuple!(A, B);
+impl_into_instructions_for_tuple!(A, B, C);
+impl_into_instructions_for_tuple!(A, B, C, D);
+impl_into_instructions_for_tuple!(A, B, C, D, E);
+
 /// Default balance assigned by [`crate::fixture::Wallet`]: ten SOL.
 pub const DEFAULT_WALLET_LAMPORTS: u64 = 10_000_000_000;
 
@@ -39,7 +88,7 @@ pub struct Test {
     pub(super) dumped_slots: Vec<u64>,
     /// Whether the mixed-slot coherence warning has already fired for this world.
     pub(super) dump_warned: bool,
-    /// Checks verified against every committed send's outcome.
+    /// Checks verified against every committed execution's outcome.
     pub(super) invariants: Vec<crate::CheckFn>,
 }
 
@@ -298,11 +347,11 @@ impl Test {
     }
 
     /// Register a [`CheckFn`](crate::CheckFn) verified after every
-    /// successful committed send.
+    /// successful committed execution.
     ///
     /// Define a protocol invariant once — a fact, a [`bundle`](crate::bundle),
     /// or a [`CheckFn::new`](crate::CheckFn::new) closure — and every
-    /// succeeding `send` in the test enforces it against the same witness the
+    /// succeeding `execute` in the test enforces it against the same witness the
     /// test would check. Failed sends commit nothing (an invariant that held
     /// before still holds) and simulations never run invariants. An invariant
     /// sees the transaction only: the accounts it reads must be part of it.
@@ -310,113 +359,45 @@ impl Test {
         self.invariants.push(check);
     }
 
-    /// Execute and commit one instruction.
-    pub fn send(&mut self, instruction: impl Into<Instruction>) -> Outcome {
-        self.execute([instruction.into()], Vec::new(), true)
+    /// Execute and commit one transaction: a single instruction, or a chain
+    /// as a tuple, array, or `Vec`.
+    pub fn execute<M>(&mut self, instructions: impl IntoInstructions<M>) -> Outcome {
+        self.run(instructions.into_instructions(), Vec::new(), true)
     }
 
-    /// Execute and commit an atomic instruction sequence.
-    pub fn send_all<I, T>(&mut self, instructions: I) -> Outcome
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<Instruction>,
-    {
-        self.execute(
-            instructions.into_iter().map(Into::into).collect::<Vec<_>>(),
-            Vec::new(),
-            true,
-        )
-    }
-
-    /// Execute and commit one instruction with raw transaction-input
-    /// accounts. Fixtures installed in the world normally make this
-    /// unnecessary; it remains useful when malformed input is the test case.
-    pub fn send_with(
+    /// Execute and commit with raw transaction-input accounts seeding or
+    /// overriding world state — useful when malformed input *is* the test.
+    pub fn execute_with<M>(
         &mut self,
-        instruction: impl Into<Instruction>,
+        instructions: impl IntoInstructions<M>,
         accounts: impl IntoIterator<Item = Account>,
     ) -> Outcome {
-        self.execute([instruction.into()], accounts.into_iter().collect(), true)
-    }
-
-    /// Execute and commit an atomic instruction sequence with raw
-    /// transaction-input accounts.
-    ///
-    /// Generalizes [`Self::send_all`] and [`Self::send_with`]: the chain runs
-    /// with the same first-appearance tracking and backfill, and any explicit
-    /// `accounts` seed or override world state for the transaction's inputs.
-    pub fn send_all_with<I, T>(
-        &mut self,
-        instructions: I,
-        accounts: impl IntoIterator<Item = Account>,
-    ) -> Outcome
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<Instruction>,
-    {
-        self.execute(
-            instructions.into_iter().map(Into::into).collect::<Vec<_>>(),
+        self.run(
+            instructions.into_instructions(),
             accounts.into_iter().collect(),
             true,
         )
     }
 
-    /// Execute an instruction without committing its changes.
-    pub fn simulate(&mut self, instruction: impl Into<Instruction>) -> Outcome {
-        self.execute([instruction.into()], Vec::new(), false)
+    /// Execute one transaction without committing its changes.
+    pub fn simulate<M>(&mut self, instructions: impl IntoInstructions<M>) -> Outcome {
+        self.run(instructions.into_instructions(), Vec::new(), false)
     }
 
-    /// Simulate one instruction with raw transaction-input accounts, without
-    /// committing its changes.
-    ///
-    /// The simulation counterpart of [`Self::send_with`]: explicit `accounts`
-    /// seed or override world state for the transaction's inputs, but nothing
-    /// is committed.
-    pub fn simulate_with(
+    /// Simulate with raw transaction-input accounts, committing nothing.
+    pub fn simulate_with<M>(
         &mut self,
-        instruction: impl Into<Instruction>,
+        instructions: impl IntoInstructions<M>,
         accounts: impl IntoIterator<Item = Account>,
     ) -> Outcome {
-        self.execute([instruction.into()], accounts.into_iter().collect(), false)
-    }
-
-    /// Simulate an atomic instruction sequence without committing its changes.
-    ///
-    /// The multi-instruction counterpart of [`Self::simulate`], mirroring
-    /// [`Self::send_all`] on the commit side.
-    pub fn simulate_all<I, T>(&mut self, instructions: I) -> Outcome
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<Instruction>,
-    {
-        self.execute(
-            instructions.into_iter().map(Into::into).collect::<Vec<_>>(),
-            Vec::new(),
-            false,
-        )
-    }
-
-    /// Simulate an atomic instruction sequence with raw transaction-input
-    /// accounts, without committing its changes.
-    ///
-    /// The simulation counterpart of [`Self::send_all_with`].
-    pub fn simulate_all_with<I, T>(
-        &mut self,
-        instructions: I,
-        accounts: impl IntoIterator<Item = Account>,
-    ) -> Outcome
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<Instruction>,
-    {
-        self.execute(
-            instructions.into_iter().map(Into::into).collect::<Vec<_>>(),
+        self.run(
+            instructions.into_instructions(),
             accounts.into_iter().collect(),
             false,
         )
     }
 
-    fn execute(
+    fn run(
         &mut self,
         instructions: impl AsRef<[Instruction]>,
         mut inputs: Vec<Account>,

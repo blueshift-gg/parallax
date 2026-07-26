@@ -60,7 +60,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
     const vault = depositInstruction.vaultAddress;
 
     const deposit = test
-      .send(depositInstruction)
+      .execute(depositInstruction)
       .succeeds()
       .check(KCu.spent(cu => cu <= 1_556n))
       .check(KAccount.lamports(vault, depositAmount))
@@ -105,7 +105,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
       new Uint8Array(32).fill(9),
     ) as KitAddress;
     const rejected = test
-      .send(
+      .execute(
         await client.createDepositInstructionRaw(
           { user, amount: 1n },
           { vault: wrongVault },
@@ -117,7 +117,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
     expect(test.account(wrongVault)).toBeNull();
 
     test
-      .send(
+      .execute(
         await client.createWithdrawInstruction({
           user,
           amount: depositAmount + 1n,
@@ -132,7 +132,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
     });
     await limited.add(kitWallet({ address: user }));
     limited
-      .send(await client.createDepositInstruction({ user, amount: 1n }))
+      .execute(await client.createDepositInstruction({ user, amount: 1n }))
       .fails({ type: "Runtime", message: "ProgramFailedToComplete" });
   });
 
@@ -153,7 +153,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
     const vault = depositInstruction.vaultAddress;
 
     const deposit = test
-      .send(depositInstruction)
+      .execute(depositInstruction)
       .succeeds()
       .check(WCu.spent(cu => cu <= 1_556n))
       .check(WAccount.lamports(vault, depositAmount))
@@ -199,7 +199,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
 
     const wrongVault = new Web3Address(new Uint8Array(32).fill(9));
     const rejected = test
-      .send(
+      .execute(
         await client.createDepositInstructionRaw(
           { user, amount: 1n },
           { vault: wrongVault },
@@ -211,7 +211,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
     expect(test.account(wrongVault)).toBeNull();
 
     test
-      .send(
+      .execute(
         await client.createWithdrawInstruction({
           user,
           amount: depositAmount + 1n,
@@ -226,7 +226,7 @@ describe.skipIf(!programPath)("vault program parity", () => {
     });
     await limited.add(web3Wallet({ address: user }));
     limited
-      .send(await client.createDepositInstruction({ user, amount: 1n }))
+      .execute(await client.createDepositInstruction({ user, amount: 1n }))
       .fails({ type: "Runtime", message: "ProgramFailedToComplete" });
   });
 

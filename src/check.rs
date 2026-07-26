@@ -9,7 +9,7 @@
 //! predicate over the measured value:
 //!
 //! ```rust,ignore
-//! test.send(deposit).succeeds().checks([
+//! test.execute(deposit).succeeds().checks([
 //!     Cu::spent(|cu| cu <= 5_000),
 //!     Account::lamports(vault, amount),                 // value ⇒ equality
 //!     Account::lamports(signer, |x| x > 0),             // predicate ⇒ anything

@@ -62,6 +62,8 @@ export type Fixture<Output> = SharedFixture<Output, Test>;
 export type Outcome = SharedOutcome<Address, WorldAccount>;
 export type AccountChange = SharedAccountChange<Address, WorldAccount>;
 export type Check = SharedCheck<Address, WorldAccount>;
+/** Rust-name alias for `Check`. */
+export type CheckFn = SharedCheck<Address, WorldAccount>;
 export type AccountCodec<Value> = SharedAccountCodec<Value, Address>;
 export type WalletOptions = SharedWalletOptions<Address>;
 export type MintOptions = SharedMintOptions<Address>;

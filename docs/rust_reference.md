@@ -154,7 +154,7 @@ fn swaps_against_a_real_pool(test: &mut Test) {
     let [pool, oracle] = test.add(Dump::accounts([POOL, ORACLE]));
     test.add(Dump::program(AMM_PROGRAM));
 
-    test.send(SwapInstruction { pool, oracle }).succeeds();
+    test.execute(SwapInstruction { pool, oracle }).succeeds();
 }
 ```
 
@@ -200,7 +200,7 @@ Every fact takes its subject and one *expectation*: a plain value means
 equality, a closure is a predicate over the measured value:
 
 ```rust,ignore
-test.send(withdraw).succeeds().checks([
+test.execute(withdraw).succeeds().checks([
     Cu::spent(|cu| cu <= 20_000),
     Account::lamports(recipient, 1_000_000),          // value ⇒ equality
     Account::lamports(user, |x| x > 0),               // predicate ⇒ anything
@@ -227,7 +227,7 @@ units) and deliberately no checks.
 
 `bundle([..])` turns several checks into one; `test.invariant(..)` registers
 any check — fact, bundle, or `CheckFn::new` closure — to run after every
-*successful* committed send (failed sends commit nothing; simulations never
+*successful* committed execution (failed sends commit nothing; simulations never
 run invariants), so a protocol invariant is written once and enforced
 everywhere:
 
@@ -237,7 +237,7 @@ fn solvent(pool: Pubkey) -> CheckFn {
 }
 
 test.invariant(solvent(pool));                    // every send now enforces it
-test.send(swap)
+test.execute(swap)
     .succeeds()
     .check(CheckFn::new(|tx| assert_eq!(tx.logs().len(), 3)));
 ```
@@ -265,16 +265,18 @@ for change in out.account_changes() {   // writable before/after, first-appearan
 }
 ```
 
-### Execution matrix
+### Execution
 
-`send` commits; `simulate` does not. Each has an `…_all` variant (an atomic
-instruction chain) and a `…_with` variant (raw transaction-input accounts,
-useful when malformed input *is* the test case), and both compose:
+`execute` commits; `simulate` never does. Both take one transaction in any
+shape — a single instruction, or a chain as a tuple, array, or `Vec` — and
+both have a `_with` variant taking raw transaction-input accounts (useful when
+malformed input *is* the test case):
 
-|            | one instruction   | instruction chain    | + explicit inputs   |
-| ---------- | ----------------- | -------------------- | ------------------- |
-| commit     | `send`            | `send_all`           | `send_with` / `send_all_with`     |
-| simulate   | `simulate`        | `simulate_all`       | `simulate_with` / `simulate_all_with` |
+```rust,ignore
+test.execute(deposit);
+test.execute((deposit, withdraw));          // an atomic chain, mixed builder types
+test.simulate_with(withdraw, [forged_account]);
+```
 
 ### Errors
 
@@ -345,7 +347,7 @@ token_program)` derives an associated-token address without installing it.
   names any address as a signer without producing a key. A permissionless
   transaction borrows an inert internal fee payer.
 - **Signer backfill vs. init targets (the writable-first rule).** An account a
-  transaction names but the world never installed is filled in on `send` by a
+  transaction names but the world never installed is filled in on `execute` by a
   single rule, checking *writable first*: a **writable** account is an init
   target and enters **empty** (even when it also signs — a keypair account
   creating itself); a **read-only signer** (a co-signer, e.g. a multisig member)

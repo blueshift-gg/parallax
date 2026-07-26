@@ -36,7 +36,7 @@ use parallax_svm::prelude::*;
 fn deposits_into_the_vault(test: &mut Test) {
     let authority = test.add(Wallet::account());
 
-    test.send(DepositInstruction { authority, amount: 1_000_000_000 })
+    test.execute(DepositInstruction { authority, amount: 1_000_000_000 })
         .succeeds()
         .check(Cu::spent(|cu| cu <= 10_000));
 }
@@ -52,7 +52,7 @@ compiled program into an isolated `Test` world — the program id defaults to
   account rules behave like mainnet.
 - **One implementation, three languages.** The Rust, Kit, and Web3.js harnesses
   share the same names, the same semantics, and deterministic worlds.
-- **Fast.** ~5 µs per `send` in Rust, ~6.5 µs from TypeScript, ~180 ns for a
+- **Fast.** ~5 µs per `execute` in Rust, ~6.5 µs from TypeScript, ~180 ns for a
   typed read. ([numbers](#performance))
 - **Spoofed signers, zero fees.** Any address can sign without a keypair, and
   balances only move when a program moves them.
@@ -72,7 +72,7 @@ One deposit test, in Rust and in TypeScript.
 fn deposits(test: &mut Test) {
     let user = test.add(Wallet::account());
 
-    test.send(DepositInstruction { user, amount: 1_000 })
+    test.execute(DepositInstruction { user, amount: 1_000 })
         .succeeds()
         .check(TokenAccount::amount(vault_of(user), 1_000));
 }
@@ -87,7 +87,7 @@ using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/vault.so");
 const user = await test.add(wallet());
 const deposit = await new VaultClient().createDepositInstruction({ user, amount: 1_000n });
 
-test.send(deposit).succeeds().check(TokenAccount.amount(vaultOf(user), 1_000n));
+test.execute(deposit).succeeds().check(TokenAccount.amount(vaultOf(user), 1_000n));
 ```
 
 `parallax-svm/kit` and `parallax-svm/web3.js` are thin shells over the same Rust
@@ -119,7 +119,7 @@ the [reference](docs/rust_reference.md#fixtures-are-values).
 ```rust,ignore
 let [pool, oracle] = test.add(Dump::accounts([POOL, ORACLE]));
 test.add(Dump::program(AMM_PROGRAM).sync_clock());   // adopt the dumped slot's clock
-test.send(SwapInstruction { pool, oracle }).succeeds();
+test.execute(SwapInstruction { pool, oracle }).succeeds();
 ```
 
 - **First run fetches once** — one batched `getMultipleAccounts` at one slot;
@@ -137,7 +137,7 @@ asserts the whole world — checks panic with address-naming messages, reads
 return plain values.
 
 ```rust,ignore
-test.send(withdraw)
+test.execute(withdraw)
     .succeeds()                            // or: .fails_with(VaultError::Unauthorized)
     .checks([
         Account::lamports(recipient, 1_000_000),
@@ -151,7 +151,7 @@ test.send(withdraw)
 struct — to run after every send, so a protocol invariant is written once and
 enforced everywhere.
 
-`send` commits, `simulate` does not; each has an `_all` (chain) and a `_with` (raw
+`execute` commits, `simulate` does not; each has an `_all` (chain) and a `_with` (raw
 inputs) variant. Full surface in the [reference](docs/rust_reference.md#outcomes).
 
 ### Typed state
@@ -182,7 +182,7 @@ let attacker = test.add(Wallet::account());
 let mut forged: Instruction = WithdrawInstruction { vault }.into();
 forged.accounts.push(AccountMeta::new_readonly(attacker, true));  // spoofed signer
 
-test.send(forged).fails_with(VaultError::Unauthorized);
+test.execute(forged).fails_with(VaultError::Unauthorized);
 ```
 
 For legitimate multisig members, `co_signers(&[..])` builds the read-only signer
@@ -204,8 +204,8 @@ Measured with `cargo test --release -- --ignored --nocapture bench_` and
 
 | Operation                                    | Measured  |
 | -------------------------------------------- | --------- |
-| `send` round-trip — Rust core                | ~5.2 µs   |
-| `send` through the TypeScript kernel (Kit)   | ~6.5 µs   |
+| `execute` round-trip — Rust core                | ~5.2 µs   |
+| `execute` through the TypeScript kernel (Kit)   | ~6.5 µs   |
 | typed-state `read` — Rust                    | ~180 ns   |
 
 The TypeScript shell adds ~1.5 µs of FFI + wire tax over the core; a Web3.js send

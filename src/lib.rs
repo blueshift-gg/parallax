@@ -13,7 +13,7 @@
 //! #[parallax_test]
 //! fn initializes(test: &mut Test) {
 //!     let authority = test.add(Wallet::account());
-//!     test.send(InitializeInstruction { authority }).succeeds();
+//!     test.execute(InitializeInstruction { authority }).succeeds();
 //! }
 //! ```
 //!
@@ -65,6 +65,7 @@ pub use {
     solana_pubkey::Pubkey,
     solana_sdk_ids::system_program,
     types::{Account, AccountChange, ProgramError},
+    world::{IntoInstructions, Many, One},
     world::{Snapshot, Test, DEFAULT_WALLET_LAMPORTS},
 };
 
@@ -84,7 +85,7 @@ pub const SPL_ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey =
 ///
 /// Each address becomes an [`AccountMeta`] that is read-only and a signer, the
 /// shape a program expects for an authority it only needs to have signed.
-/// [`Test::send`] auto-registers any co-signer the world has not installed as a
+/// [`Test::execute`] auto-registers any co-signer the world has not installed as a
 /// funded system account — as it does for every signer it backfills — so tests
 /// pass the addresses alone without hand-rolling metas or wallets.
 pub fn co_signers(addresses: &[Pubkey]) -> Vec<AccountMeta> {
@@ -539,7 +540,7 @@ mod tests {
 
         // Installed as a wallet, the same transfer goes through.
         test.add(Wallet::account().at(payer));
-        test.send(system_transfer(payer, recipient, amount))
+        test.execute(system_transfer(payer, recipient, amount))
             .succeeds()
             .checks([
                 Account::lamports(recipient, amount),
@@ -593,7 +594,7 @@ mod tests {
             .accounts
             .push(AccountMeta::new_readonly(cosigner, true));
 
-        test.send(transfer)
+        test.execute(transfer)
             .succeeds()
             .check(Account::lamports(cosigner, DEFAULT_WALLET_LAMPORTS));
     }
@@ -613,7 +614,7 @@ mod tests {
         })
     }
 
-    // A registered invariant is verified after every committed send — the
+    // A registered invariant is verified after every committed execution — the
     // second transfer pushes the recipient past the cap and the *send itself*
     // fails, with no assertion written at the call site.
     #[test]
@@ -625,10 +626,10 @@ mod tests {
         test.add(Wallet::account().at(payer));
         test.invariant(capped(recipient, 1_500_000_000));
 
-        test.send(system_transfer(payer, recipient, 1_000_000_000))
+        test.execute(system_transfer(payer, recipient, 1_000_000_000))
             .succeeds();
         // The invariant panics inside this send, before its outcome exists.
-        let _ = test.send(system_transfer(payer, recipient, 1_000_000_000));
+        let _ = test.execute(system_transfer(payer, recipient, 1_000_000_000));
     }
 
     // Simulations commit nothing, so invariants do not judge them: the same
@@ -714,7 +715,7 @@ mod tests {
             let payer = test.add(Wallet::account().fund(u64::MAX));
             let recipient = Pubkey::new_from_array([9; 32]);
             report("send_round_trip", 5_000, || {
-                std::hint::black_box(test.send(system_transfer(payer, recipient, 1)).is_ok());
+                std::hint::black_box(test.execute(system_transfer(payer, recipient, 1)).is_ok());
             });
         }
 

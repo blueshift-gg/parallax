@@ -748,9 +748,9 @@ fn execute(
         };
         let test = &mut handle.test;
         let outcome = if commit {
-            test.send_all_with(ixs, inputs)
+            test.execute_with(ixs, inputs)
         } else {
-            test.simulate_all_with(ixs, inputs)
+            test.simulate_with(ixs, inputs)
         };
         Ok(wire::serialize_outcome(&outcome))
     })) {

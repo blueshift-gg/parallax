@@ -239,7 +239,7 @@ describe("dump fixture", () => {
           accounts: [{ address: bogus, role: AccountRole.READONLY }],
           data: new Uint8Array(),
         };
-        const outcome = test.send(failing);
+        const outcome = test.execute(failing);
         expect(outcome.isErr()).toBe(true);
         expect(() => outcome.succeeds()).toThrow(/missing account/);
         expect(() => outcome.succeeds()).toThrow(/dump accounts fixture/);

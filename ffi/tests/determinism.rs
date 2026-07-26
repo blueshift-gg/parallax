@@ -52,12 +52,12 @@ fn scenario() -> ScenarioBytes {
 
     // A successful send: move lamports from the funded payer to a new account.
     let recipient = Pubkey::new_from_array([9; 32]);
-    let ok = wire::serialize_outcome(&test.send(system_transfer(payer, recipient, 1_000_000)));
+    let ok = wire::serialize_outcome(&test.execute(system_transfer(payer, recipient, 1_000_000)));
 
     // A failed send: an uninstalled writable signer enters as an empty init
     // target with no lamports, so the transfer fails and commits nothing.
     let ghost = Pubkey::new_from_array([8; 32]);
-    let err = wire::serialize_outcome(&test.send(system_transfer(ghost, recipient, 1_000_000)));
+    let err = wire::serialize_outcome(&test.execute(system_transfer(ghost, recipient, 1_000_000)));
 
     // Post-state of every touched account, in a fixed address order.
     let alice_ata = test.derive_ata(alice, mint, TokenProgram::Legacy);

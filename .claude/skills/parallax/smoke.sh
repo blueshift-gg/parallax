@@ -20,4 +20,5 @@ if [ -n "${PARALLAX_PROGRAM_PATH:-}" ]; then
   echo "== Program parity (artifact provided) =="
   PARALLAX_SVM_LIB="$root/target/release/libparallax_svm_ffi.dylib" npm run --silent test:program 2>&1 | grep -E "Tests" | tail -1
 fi
+bash "$root/scripts/check-vocabulary.sh"
 echo "SMOKE OK"
