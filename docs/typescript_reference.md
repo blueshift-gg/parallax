@@ -129,10 +129,10 @@ test
     Cu.spent().le(20_000n),
     Account.lamports(recipient).eq(1_000_000n),
     Account.owner(vault).eq(test.programId),
-    Token.amount(userAta).eq(600n),
-    Token.supply(mint).eq(1_000n),
+    TokenAccount.with_amount(userAta).eq(600n),
+    Mint.with_supply(mint).eq(1_000n),
     Changes.eq([user, vault]),                 // the exact changed set, in order
-    Changes.created(vault),
+    Account.created(vault),
     Account.state(VaultCodec, vault).eq({ authority, amount: 600n }),
   ]);
 ```
@@ -140,7 +140,7 @@ test
 The namespaces mirror Rust exactly — `Cu.spent()`, `Account.lamports(addr)`,
 `Account.owner(addr).eq`, `Account.data(addr).eq`,
 `Account.state(codec, addr).eq` (deep equality) / `.with(cb)`,
-`Token.amount(addr)` / `Token.supply(mint)`, `ReturnData.eq`, and
+`TokenAccount.with_amount(addr)` / `Mint.with_supply(mint)`, `ReturnData.eq`, and
 `Changes.eq/created/removed/closed`; numeric facts take `eq, le, lt, ge, gt`.
 In TypeScript a check is simply a function of the outcome.
 

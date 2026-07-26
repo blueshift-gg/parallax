@@ -74,7 +74,7 @@ fn deposits(test: &mut Test) {
 
     test.send(DepositInstruction { user, amount: 1_000 })
         .succeeds()
-        .check(Token::amount(vault_of(user)).eq(1_000));
+        .check(TokenAccount::amount(vault_of(user)).eq(1_000));
 }
 ```
 
@@ -87,7 +87,7 @@ using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/vault.so");
 const user = await test.add(wallet());
 const deposit = await new VaultClient().createDepositInstruction({ user, amount: 1_000n });
 
-test.send(deposit).succeeds().check(Token.amount(vaultOf(user)).eq(1_000n));
+test.send(deposit).succeeds().check(TokenAccount.with_amount(vaultOf(user)).eq(1_000n));
 ```
 
 `parallax-svm/kit` and `parallax-svm/web3.js` are thin shells over the same Rust
@@ -142,7 +142,7 @@ test.send(withdraw)
     .check([
         Account::lamports(recipient).eq(1_000_000),
         Account::owner(vault).eq(program_id),
-        Token::amount(user_ata).eq(600),
+        TokenAccount::amount(user_ata).eq(600),
         Changes::eq([recipient, vault]),   // the exact changed set, in order
     ]);
 ```

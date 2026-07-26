@@ -56,11 +56,11 @@ account enters empty on purpose (see semantics below). Pick by what you need:
 | --- | --- | --- |
 | A funded actor | `Wallet::account()` (10 SOL) · `.fund(n)` exact · `.at(addr)` pinned | `wallet()` / `wallet({ fund, address })` |
 | Actors at known addresses | `Wallet::accounts([A, B]).fund(n)` | `wallet({ accounts: [A, B], fund })` |
-| A mint | `Mint::account().supply(n).decimals(d).with_authority(a)` | `mint({ supply, decimals, authority })` |
-| A funded holder set | `Mint::account().supply(1_000).with_holder([(user, 400)])` — one funded ATA per holder | `mint({ supply, holders: [[user, 400n]] })` |
-| N fresh mints | `let [a, b] = test.add(Mint::accounts().supply(9));` — N inferred from the pattern | `mint({ count: 2 })` |
-| A token account | `TokenAccount::account(mint, owner).amount(n)` · pinned plural `TokenAccount::accounts([A, B], mint, owner)` | `tokenAccount(mint, owner, { amount })` |
-| An ATA | `AssociatedTokenAccount::account(mint, owner).amount(n)` | `associatedTokenAccount(mint, owner, { amount })` |
+| A mint | `Mint::account().with_supply(n).decimals(d).with_authority(a)` | `mint({ supply, decimals, authority })` |
+| A funded holder set | `Mint::account().with_supply(1_000).with_holder([(user, 400)])` — one funded ATA per holder | `mint({ supply, holders: [[user, 400n]] })` |
+| N fresh mints | `let [a, b] = test.add(Mint::accounts().with_supply(9));` — N inferred from the pattern | `mint({ count: 2 })` |
+| A token account | `TokenAccount::account(mint, owner).with_amount(n)` · pinned plural `TokenAccount::accounts([A, B], mint, owner)` | `tokenAccount(mint, owner, { amount })` |
+| An ATA | `AssociatedTokenAccount::account(mint, owner).with_amount(n)` | `associatedTokenAccount(mint, owner, { amount })` |
 | Raw bytes | `Account::new(addr, owner_program, lamports, data)` | `account({ address, owner, data })` |
 | A CPI callee | `Program::new(id, elf)` | `program(id, elf)` |
 
@@ -97,10 +97,10 @@ test.send(withdraw)
         Account::lamports(addr).eq(n),
         Account::owner(addr).eq(program),
         Account::data(addr).eq(bytes),
-        Token::amount(ata).eq(n), Token::supply(mint).eq(n),
+        TokenAccount::amount(ata).eq(n), Mint::supply(mint).eq(n),
         ReturnData::eq(bytes),
         Changes::eq([user, vault]),      // exact changed set, in order
-        Changes::created(vault),         // and removed(a) / closed(a)
+        Account::created(vault),         // and removed(a) / closed(a)
     ])
     .check(Account::state(vault).eq(Vault { authority, amount: 600 }));  // typed, T inferred
 ```

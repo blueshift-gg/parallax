@@ -55,14 +55,14 @@ let mint = test.add(
     Mint::account()                                   // fixed-supply, 6-decimal legacy mint
         .with_authority(authority)                    // ...now mintable
         .with_freeze_authority(authority)
-        .supply(1_000)
+        .with_supply(1_000)
         .decimals(9)
         .token_program(TokenProgram::Token2022)
         .with_holder([(alice, 400), (bob, 600)]),     // one ATA per holder, funded
 );
 
-let vault = test.add(TokenAccount::account(mint, authority).amount(600));
-let ata = test.add(AssociatedTokenAccount::account(mint, authority).amount(400));
+let vault = test.add(TokenAccount::account(mint, authority).with_amount(600));
+let ata = test.add(AssociatedTokenAccount::account(mint, authority).with_amount(400));
 ```
 
 The built-ins are `Wallet`, `Mint`, `TokenAccount`, `AssociatedTokenAccount`,
@@ -84,11 +84,11 @@ let [alice, bob, carol] = test.add([Wallet::account().fund(7); 3]);
 
 // Pinned plural — the addresses lead, one config applied at each (mirrors Dump::accounts):
 let [a, b] = test.add(Wallet::accounts([ADDR_A, ADDR_B]).fund(5_000));
-let [ta, tb] = test.add(TokenAccount::accounts([TA, TB], mint, owner).amount(42));
+let [ta, tb] = test.add(TokenAccount::accounts([TA, TB], mint, owner).with_amount(42));
 
 // Fresh plural — N distinct mints sharing one config. N is inferred from the
 // destructuring pattern, so no count is ever written:
-let [m1, m2] = test.add(Mint::accounts().supply(1_000));
+let [m1, m2] = test.add(Mint::accounts().with_supply(1_000));
 ```
 
 `Wallet`/`TokenAccount` are `Copy`, so their *fresh* plural is just
@@ -188,10 +188,10 @@ test.send(withdraw)
         Cu::spent().le(20_000),
         Account::lamports(recipient).eq(1_000_000),
         Account::owner(vault).eq(program_id),
-        Token::amount(user_ata).eq(600),
-        Token::supply(mint).eq(1_000),
+        TokenAccount::amount(user_ata).eq(600),
+        Mint::supply(mint).eq(1_000),
         Changes::eq([user, vault]),               // the exact changed set, in order
-        Changes::created(vault),
+        Account::created(vault),
     ])
     .check(Account::state(vault).eq(VaultState { authority, amount: 600 }));
 ```
@@ -205,16 +205,18 @@ The fact namespaces:
 | `Account::owner(addr)` | `eq(program)` |
 | `Account::data(addr)` | `eq(bytes)` — the raw sibling of `state` |
 | `Account::state(addr)` | `eq(value)` — typed, `T` inferred; `with::<T>(\|s\| ..)` for partial facts |
-| `Token::amount(addr)` / `Token::supply(mint)` | `eq, le, lt, ge, gt (n)` |
+| `TokenAccount::amount(addr)` / `Mint::supply(mint)` | `eq, le, lt, ge, gt (n)` |
 | `ReturnData` | `eq(bytes)` |
-| `Changes` | `eq([addrs])`, `created(addr)`, `removed(addr)`, `closed(addr)` |
+| `Account::created/removed/closed (addr)` | lifecycle facts from the change set |
+| `Changes` | `eq([addrs])` — the exact changed set, in order |
 
 Every constructor returns the same concrete `Assert` type, which is why a
 plain array works. `Account::state(..).eq` decodes through the type's wincode
 schema and fails with the full decoded/expected pair; `Changes::closed`
 asserts Solana's closed-account state (removed entirely, or retained empty
-and system-owned). Mint supply lives under `Token` because the `Mint` name is
-the fixture's.
+and system-owned). The fixture nouns measure themselves: `Mint` installs mints
+and asserts their supply, `TokenAccount` installs token accounts and asserts
+their balances — one vocabulary for setup and verification.
 
 ### Custom checks and invariants
 

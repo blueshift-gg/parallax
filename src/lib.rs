@@ -57,7 +57,7 @@ mod world;
 pub use dump::DumpPlan;
 
 pub use {
-    check::{Assert, Changes, Check, Cu, Measure, ReturnData, Token},
+    check::{Assert, Changes, Check, Cu, Measure, ReturnData},
     outcome::Outcome,
     parallax_svm_derive::parallax_test,
     setup::{SetupError, TestBuilder, PROGRAM_PATH_ENV},
@@ -103,7 +103,7 @@ pub mod prelude {
             Wallet,
         },
         parallax_test, system_program, Account, AccountChange, AccountMeta, Assert, Changes, Check,
-        Cu, Instruction, Outcome, ProgramError, Pubkey, ReturnData, Snapshot, Test, Token,
+        Cu, Instruction, Outcome, ProgramError, Pubkey, ReturnData, Snapshot, Test,
         DEFAULT_WALLET_LAMPORTS, SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID,
         SPL_TOKEN_PROGRAM_ID,
     };
@@ -211,18 +211,18 @@ mod tests {
         let mint = test.add(
             Mint::account()
                 .with_authority(wallet)
-                .supply(1_000)
+                .with_supply(1_000)
                 .decimals(9)
                 .token_program(TokenProgram::Token2022),
         );
         let tokens = test.add(
             TokenAccount::account(mint, wallet)
-                .amount(600)
+                .with_amount(600)
                 .token_program(TokenProgram::Token2022),
         );
         let associated = test.add(
             AssociatedTokenAccount::account(mint, wallet)
-                .amount(400)
+                .with_amount(400)
                 .token_program(TokenProgram::Token2022),
         );
 
@@ -257,7 +257,7 @@ mod tests {
     fn accounts_const_generic_installs_n_distinct_fresh_fixtures() {
         let mut test = empty_test();
 
-        let [first, second] = test.add(Mint::accounts().supply(1_000));
+        let [first, second] = test.add(Mint::accounts().with_supply(1_000));
         assert_ne!(first, second);
         assert_eq!(test.supply(first), 1_000);
         assert_eq!(test.supply(second), 1_000);
@@ -278,12 +278,12 @@ mod tests {
         assert_eq!(test.lamports(b), 5_000);
 
         // TokenAccount::accounts carries mint/owner/amount to each pinned address.
-        let mint = test.add(Mint::account().supply(1_000));
+        let mint = test.add(Mint::account().with_supply(1_000));
         let owner = test.add(Wallet::account());
         let ta_a = Pubkey::new_from_array([20; 32]);
         let ta_b = Pubkey::new_from_array([21; 32]);
         let [first, second] =
-            test.add(TokenAccount::accounts([ta_a, ta_b], mint, owner).amount(42));
+            test.add(TokenAccount::accounts([ta_a, ta_b], mint, owner).with_amount(42));
         assert_eq!([first, second], [ta_a, ta_b]);
         assert_eq!(test.tokens(ta_a), 42);
         assert_eq!(test.tokens(ta_b), 42);
@@ -327,7 +327,7 @@ mod tests {
         let mint = test.add(
             Mint::account()
                 .with_authority(authority)
-                .supply(1_000)
+                .with_supply(1_000)
                 .token_program(TokenProgram::Token2022)
                 .with_holder([(alice, 400), (bob, 600)]),
         );
@@ -364,7 +364,7 @@ mod tests {
         use spl_token::{solana_program::program_pack::Pack, state::Mint as SplMint};
 
         let mut test = empty_test();
-        let mint = test.add(Mint::account().supply(1_000));
+        let mint = test.add(Mint::account().with_supply(1_000));
         let decoded = SplMint::unpack(&test.account(mint).unwrap().data).unwrap();
 
         assert_eq!(decoded.mint_authority, COption::None);
@@ -541,7 +541,7 @@ mod tests {
             .check([
                 Account::lamports(recipient).eq(amount),
                 Changes::eq([payer, recipient]),
-                Changes::created(recipient),
+                Account::created(recipient),
             ]);
     }
 
@@ -680,10 +680,10 @@ mod tests {
             report("world_setup_16_fixtures", 2_000, || {
                 let mut test = empty_test();
                 let authority = test.add(Wallet::account());
-                let mint = test.add(Mint::account().with_authority(authority).supply(1_000));
+                let mint = test.add(Mint::account().with_authority(authority).with_supply(1_000));
                 for _ in 0..14 {
                     let holder = test.add(Wallet::account());
-                    test.add(TokenAccount::account(mint, holder).amount(10));
+                    test.add(TokenAccount::account(mint, holder).with_amount(10));
                 }
                 std::hint::black_box(&test);
             });

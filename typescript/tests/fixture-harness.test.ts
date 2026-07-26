@@ -15,7 +15,7 @@ import {
   Changes as KChanges,
   Cu as KCu,
   ReturnData as KReturnData,
-  Token as KToken,
+  TokenAccount as KTokenAccount,
   DEFAULT_WALLET_LAMPORTS,
   Test as KitTest,
   account as kitAccount,
@@ -31,7 +31,7 @@ import {
   Account as WAccount,
   Cu as WCu,
   ReturnData as WReturnData,
-  Token as WToken,
+  TokenAccount as WTokenAccount,
   Test as Web3Test,
   account as web3Account,
   addressesEqual as web3AddressesEqual,
@@ -126,8 +126,8 @@ describe("fixture-first test harness", () => {
     const outcome = test
       .send(transfer)
       .succeeds()
-      .check(KToken.amount(alice).eq(4_000n))
-      .check(KToken.amount(bob).eq(1_000n))
+      .check(KTokenAccount.amount(alice).eq(4_000n))
+      .check(KTokenAccount.amount(bob).eq(1_000n))
       .check(KCu.spent().le(20_000n));
     expect(outcome.accountChanges.map(change => change.address)).toEqual([
       alice,
@@ -138,10 +138,10 @@ describe("fixture-first test harness", () => {
     test
       .send({ ...transfer, data: transferData(10_000n) })
       .failsWith(1)
-      .check(KToken.amount(alice).eq(4_000n))
-      .check(KToken.amount(bob).eq(1_000n));
+      .check(KTokenAccount.amount(alice).eq(4_000n))
+      .check(KTokenAccount.amount(bob).eq(1_000n));
 
-    test.simulate(transfer).succeeds().check(KToken.amount(bob).eq(2_000n));
+    test.simulate(transfer).succeeds().check(KTokenAccount.amount(bob).eq(2_000n));
     expect(test.tokens(bob)).toBe(1_000n);
 
     const protocol: KitFixture<readonly [typeof authority, typeof mint]> = {
@@ -175,8 +175,8 @@ describe("fixture-first test harness", () => {
     const outcome = test
       .send(transfer)
       .succeeds()
-      .check(WToken.amount(alice).eq(4_000n))
-      .check(WToken.amount(bob).eq(1_000n))
+      .check(WTokenAccount.amount(alice).eq(4_000n))
+      .check(WTokenAccount.amount(bob).eq(1_000n))
       .check(WCu.spent().le(20_000n));
     expect(
       outcome.accountChanges.map(change => change.address.toBase58()),
@@ -192,10 +192,10 @@ describe("fixture-first test harness", () => {
         }),
       )
       .failsWith(1)
-      .check(WToken.amount(alice).eq(4_000n))
-      .check(WToken.amount(bob).eq(1_000n));
+      .check(WTokenAccount.amount(alice).eq(4_000n))
+      .check(WTokenAccount.amount(bob).eq(1_000n));
 
-    test.simulate(transfer).succeeds().check(WToken.amount(bob).eq(2_000n));
+    test.simulate(transfer).succeeds().check(WTokenAccount.amount(bob).eq(2_000n));
     expect(test.tokens(bob)).toBe(1_000n);
 
     const protocol: Web3Fixture<readonly [Address, Address]> = {
@@ -516,7 +516,7 @@ describe("typed account ergonomics", () => {
       data: transferData(500n),
     };
 
-    test.send(transfer).succeeds().check(KToken.amount(bob).eq(500n));
+    test.send(transfer).succeeds().check(KTokenAccount.amount(bob).eq(500n));
   });
 
   it("builds co-signer metas and auto-registers missing signers (Web3.js)", async () => {
@@ -552,7 +552,7 @@ describe("typed account ergonomics", () => {
       data: transferData(500n),
     });
 
-    test.send(transfer).succeeds().check(WToken.amount(bob).eq(500n));
+    test.send(transfer).succeeds().check(WTokenAccount.amount(bob).eq(500n));
   });
 });
 
@@ -855,7 +855,7 @@ describe("checks and invariants", () => {
       .succeeds()
       .check(KCu.spent().le(10_000))
       .check(outcome => expect(outcome.isOk()).toBe(true))
-      .check([KCu.spent().le(10_000), KReturnData.eq([]), KAccount.data(recipient).eq([]), KChanges.created(recipient)]);
+      .check([KCu.spent().le(10_000), KReturnData.eq([]), KAccount.data(recipient).eq([]), KAccount.created(recipient)]);
 
     expect(() => test.send(transfer())).toThrow("cap exceeded");
     test.simulate(transfer()).succeeds();

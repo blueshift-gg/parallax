@@ -185,7 +185,7 @@ impl Mint {
     /// `N` fresh mints sharing one configuration, returned as `[Pubkey; N]` —
     /// the plural of [`Mint::account`]. `N` is inferred from the destructuring
     /// pattern, so no count is ever written:
-    /// `let [a, b] = test.add(Mint::accounts().supply(1_000));`.
+    /// `let [a, b] = test.add(Mint::accounts().with_supply(1_000));`.
     ///
     /// Each mint is placed at its own deterministic address, so the `N`
     /// addresses are distinct. The returned builder takes the same options as
@@ -208,7 +208,7 @@ impl Mint {
     }
 
     /// Set the initial token supply.
-    pub fn supply(mut self, supply: u64) -> Self {
+    pub fn with_supply(mut self, supply: u64) -> Self {
         self.supply = supply;
         self
     }
@@ -256,9 +256,9 @@ impl<const N: usize> Mints<N> {
         self
     }
 
-    /// Set the initial supply of every mint; see [`Mint::supply`].
-    pub fn supply(mut self, supply: u64) -> Self {
-        self.0 = self.0.supply(supply);
+    /// Set the initial supply of every mint; see [`Mint::with_supply`].
+    pub fn with_supply(mut self, supply: u64) -> Self {
+        self.0 = self.0.with_supply(supply);
         self
     }
 
@@ -362,7 +362,7 @@ impl TokenAccount {
     }
 
     /// Set the initial token balance.
-    pub fn amount(mut self, amount: u64) -> Self {
+    pub fn with_amount(mut self, amount: u64) -> Self {
         self.amount = amount;
         self
     }
@@ -383,9 +383,9 @@ pub struct TokenAccounts<const N: usize> {
 }
 
 impl<const N: usize> TokenAccounts<N> {
-    /// Set the balance of every account; see [`TokenAccount::amount`].
-    pub fn amount(mut self, amount: u64) -> Self {
-        self.account = self.account.amount(amount);
+    /// Set the balance of every account; see [`TokenAccount::with_amount`].
+    pub fn with_amount(mut self, amount: u64) -> Self {
+        self.account = self.account.with_amount(amount);
         self
     }
 
@@ -457,7 +457,7 @@ impl AssociatedTokenAccount {
     }
 
     /// Set the initial token balance.
-    pub fn amount(mut self, amount: u64) -> Self {
+    pub fn with_amount(mut self, amount: u64) -> Self {
         self.amount = amount;
         self
     }

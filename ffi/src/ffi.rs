@@ -245,7 +245,7 @@ pub extern "C" fn parallax_install_token_account(
         let input = wire::deserialize_token_account_input(bytes)
             .map_err(|e| format!("invalid token account input: {e}"))?;
         let mut account = TokenAccount::account(input.mint, input.owner)
-            .amount(input.amount)
+            .with_amount(input.amount)
             .token_program(input.token_program);
         if let Some(address) = input.address {
             account = account.at(address);
@@ -267,7 +267,7 @@ pub extern "C" fn parallax_install_ata(
         let input =
             wire::deserialize_ata_input(bytes).map_err(|e| format!("invalid ata input: {e}"))?;
         let account = AssociatedTokenAccount::account(input.mint, input.owner)
-            .amount(input.amount)
+            .with_amount(input.amount)
             .token_program(input.token_program);
         Ok(test.add(account))
     })
@@ -317,7 +317,7 @@ pub extern "C" fn parallax_install_mint(
                 .map_err(|e| Failure::wire(format!("invalid mint input: {e}")))?;
             let token_program = input.token_program;
             let mut mint = Mint::account()
-                .supply(input.supply)
+                .with_supply(input.supply)
                 .decimals(input.decimals)
                 .token_program(token_program)
                 .with_holder(input.holders.iter().copied());

@@ -181,7 +181,8 @@ const adapter: HarnessAdapter<Address, WorldAccount, Instruction, Outcome> = {
 };
 
 /** The built-in fact namespaces for `check([..])` and `invariant(..)`. */
-export const { Cu, Account, Token, ReturnData, Changes } = createChecks(adapter);
+export const { Cu, Account, Mint, TokenAccount, ReturnData, Changes } =
+  createChecks(adapter);
 
 /** An isolated fixture-first test world using Kit address and account types. */
 export class Test extends TestCore<Address, WorldAccount, Instruction, Outcome> {

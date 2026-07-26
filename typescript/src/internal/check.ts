@@ -43,28 +43,34 @@ export interface Checks<Address, Account> {
       /** Assert on the decoded state with a closure, for partial facts. */
       with(check: (state: Value) => void): Check<Address, Account>;
     };
-  };
-  /** Token-program facts; both read Token or Token-2022 accounts. */
-  readonly Token: {
-    /** The token balance of the token account at `address`. */
-    amount(address: Address): Comparators<Address, Account>;
-    /** The supply of the mint at `address`. */
-    supply(address: Address): Comparators<Address, Account>;
-  };
-  /** Transaction return-data facts. */
-  readonly ReturnData: {
-    eq(expected: Uint8Array | readonly number[]): Check<Address, Account>;
-  };
-  /** Changed-account facts, from the transaction's writable before/after set. */
-  readonly Changes: {
-    /** Assert the exact changed set, in first-appearance order. */
-    eq(addresses: readonly Address[]): Check<Address, Account>;
     /** Assert the transaction created the account (absent before). */
     created(address: Address): Check<Address, Account>;
     /** Assert the transaction removed the account (absent after). */
     removed(address: Address): Check<Address, Account>;
     /** Assert Solana's closed-account state at `address`. */
     closed(address: Address): Check<Address, Account>;
+  };
+  /** The mint fact; reads Token or Token-2022 mints. */
+  readonly Mint: {
+    /** The supply of the mint at `address`. */
+    supply(address: Address): Comparators<Address, Account>;
+  };
+  /** The token-account fact; reads Token or Token-2022 accounts. */
+  readonly TokenAccount: {
+    /** The token balance of the token account at `address`. */
+    amount(address: Address): Comparators<Address, Account>;
+  };
+  /** Transaction return-data facts. */
+  readonly ReturnData: {
+    eq(expected: Uint8Array | readonly number[]): Check<Address, Account>;
+  };
+  /**
+   * The transaction-scoped changed-set fact; per-account lifecycle facts
+   * (`created`/`removed`/`closed`) live on `Account`.
+   */
+  readonly Changes: {
+    /** Assert the exact changed set, in first-appearance order. */
+    eq(addresses: readonly Address[]): Check<Address, Account>;
   };
 }
 
@@ -225,6 +231,28 @@ export function createChecks<Address, Account>(
           }
         },
       }),
+      created: (address): C => outcome => {
+        if (!requiredChange(outcome, address).wasCreated()) {
+          throw new Error(
+            `account ${adapter.renderAddress(address)} was not created by this transaction`,
+          );
+        }
+      },
+      removed: (address): C => outcome => {
+        if (!requiredChange(outcome, address).wasRemoved()) {
+          throw new Error(
+            `account ${adapter.renderAddress(address)} was not removed by this transaction`,
+          );
+        }
+      },
+      closed: (address): C => outcome => {
+        const account = outcome.account(address);
+        if (account !== null && !adapter.isClosed(account)) {
+          throw new Error(
+            `account ${adapter.renderAddress(address)} is not closed`,
+          );
+        }
+      },
       state: (codec, address) => ({
         eq: (expected): C => outcome => {
           const actual = decodeAccount(
@@ -251,9 +279,11 @@ export function createChecks<Address, Account>(
         },
       }),
     },
-    Token: {
-      amount: accountValue("token balance", adapter.tokenAmount),
+    Mint: {
       supply: accountValue("mint supply", adapter.mintSupply),
+    },
+    TokenAccount: {
+      amount: accountValue("token balance", adapter.tokenAmount),
     },
     ReturnData: {
       eq: (expected): C => outcome => {
@@ -280,28 +310,6 @@ export function createChecks<Address, Account>(
               .join(", ")}], got [${outcome.accountChanges
               .map(change => adapter.renderAddress(change.address))
               .join(", ")}]`,
-          );
-        }
-      },
-      created: (address): C => outcome => {
-        if (!requiredChange(outcome, address).wasCreated()) {
-          throw new Error(
-            `account ${adapter.renderAddress(address)} was not created by this transaction`,
-          );
-        }
-      },
-      removed: (address): C => outcome => {
-        if (!requiredChange(outcome, address).wasRemoved()) {
-          throw new Error(
-            `account ${adapter.renderAddress(address)} was not removed by this transaction`,
-          );
-        }
-      },
-      closed: (address): C => outcome => {
-        const account = outcome.account(address);
-        if (account !== null && !adapter.isClosed(account)) {
-          throw new Error(
-            `account ${adapter.renderAddress(address)} is not closed`,
           );
         }
       },

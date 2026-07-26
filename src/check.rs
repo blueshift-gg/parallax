@@ -36,7 +36,8 @@ use {
 ///
 /// Built-in checks follow one shape — name the fact, bind its subject, then
 /// compare: [`Cu::spent`], [`Account::lamports`](crate::Account::lamports) and
-/// its `owner`/`data`/`state` siblings, [`Token::amount`]/[`Token::supply`],
+/// its siblings (`owner`/`data`/`state`/`created`/`removed`/`closed`),
+/// [`TokenAccount::amount`](crate::fixture::TokenAccount::amount)/[`Mint::supply`](crate::fixture::Mint::supply),
 /// plus the transaction-scoped [`ReturnData`] and [`Changes`]. Closures,
 /// arrays, and tuples of checks all qualify, and applications implement the
 /// trait to name their own invariants:
@@ -326,17 +327,21 @@ impl Cu {
     }
 }
 
-/// Token-program facts: `Token::amount(ata).ge(500)`,
-/// `Token::supply(mint).eq(1_000)`. Both read Token or Token-2022 accounts.
-pub struct Token;
-
-impl Token {
-    /// The token balance of the token account at `address`.
+/// The token-account fact, hung off the [`TokenAccount`](crate::fixture::TokenAccount)
+/// fixture type itself: one noun installs token accounts and measures them.
+/// Reads Token or Token-2022 accounts.
+impl crate::fixture::TokenAccount {
+    /// The token balance of the token account at `address`:
+    /// `TokenAccount::amount(ata).ge(500)`.
     pub fn amount(address: Pubkey) -> Measure {
         Measure(MeasureSource::Account(AccountValue::Tokens, address))
     }
+}
 
-    /// The supply of the mint at `address`.
+/// The mint fact, hung off the [`Mint`](crate::fixture::Mint) fixture type
+/// itself. Reads Token or Token-2022 mints.
+impl crate::fixture::Mint {
+    /// The supply of the mint at `address`: `Mint::supply(mint).eq(1_000)`.
     pub fn supply(address: Pubkey) -> Measure {
         Measure(MeasureSource::Account(AccountValue::Supply, address))
     }
@@ -367,6 +372,24 @@ impl crate::Account {
     /// checked; pair with [`Self::owner`] when it matters.
     pub fn state(address: Pubkey) -> StateMeasure {
         StateMeasure(address)
+    }
+
+    /// Assert the transaction created the account at `address` (absent
+    /// before, present after).
+    pub fn created(address: Pubkey) -> Assert {
+        Assert(Inner::Created(address))
+    }
+
+    /// Assert the transaction removed the account at `address` (present
+    /// before, absent after).
+    pub fn removed(address: Pubkey) -> Assert {
+        Assert(Inner::Removed(address))
+    }
+
+    /// Assert Solana's closed-account state at `address`: the runtime may
+    /// remove the account entirely or retain its empty system-owned form.
+    pub fn closed(address: Pubkey) -> Assert {
+        Assert(Inner::Closed(address))
     }
 }
 
@@ -442,7 +465,9 @@ where
     crate::world::decode::<T>("state", address, &account.data, 0)
 }
 
-/// Changed-account facts, from the transaction's writable before/after set.
+/// The transaction-scoped changed-set fact. Per-account lifecycle facts
+/// ([`created`](crate::Account::created), [`removed`](crate::Account::removed),
+/// [`closed`](crate::Account::closed)) live on `Account`.
 pub struct Changes;
 
 impl Changes {
@@ -450,23 +475,5 @@ impl Changes {
     /// first-appearance order: `Changes::eq([signer, vault])`.
     pub fn eq(addresses: impl Into<Vec<Pubkey>>) -> Assert {
         Assert(Inner::ChangesEq(addresses.into()))
-    }
-
-    /// Assert the transaction created the account at `address` (absent
-    /// before, present after).
-    pub fn created(address: Pubkey) -> Assert {
-        Assert(Inner::Created(address))
-    }
-
-    /// Assert the transaction removed the account at `address` (present
-    /// before, absent after).
-    pub fn removed(address: Pubkey) -> Assert {
-        Assert(Inner::Removed(address))
-    }
-
-    /// Assert Solana's closed-account state at `address`: the runtime may
-    /// remove the account entirely or retain its empty system-owned form.
-    pub fn closed(address: Pubkey) -> Assert {
-        Assert(Inner::Closed(address))
     }
 }

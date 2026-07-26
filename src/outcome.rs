@@ -414,13 +414,13 @@ mod tests {
         let mut outcome = state_outcome(created.clone());
         outcome.changes = vec![crate::AccountChange::new(address, None, Some(created))];
 
-        outcome.check([Changes::eq([address]), Changes::created(address)]);
+        outcome.check([Changes::eq([address]), Account::created(address)]);
     }
 
     #[test]
     #[should_panic(expected = "did not change account")]
     fn changes_facts_name_an_untouched_account() {
-        outcome(&[], 0).check(Changes::created(Pubkey::new_from_array([8; 32])));
+        outcome(&[], 0).check(Account::created(Pubkey::new_from_array([8; 32])));
     }
 
     #[test]

@@ -45,7 +45,7 @@ fn scenario() -> ScenarioBytes {
     let mint = test.add(
         Mint::account()
             .with_authority(payer)
-            .supply(1_000)
+            .with_supply(1_000)
             .token_program(TokenProgram::Legacy)
             .with_holder([(alice, 400), (bob, 600)]),
     );
