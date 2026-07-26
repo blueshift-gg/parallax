@@ -1,16 +1,13 @@
 # Parallax design & guarantees
 
-The contracts the harness is built to make true, and the rules that keep the
-public surface deliberate. The [README](../README.md) is the tour and
-[`docs/reference.md`](reference.md) is the API manual; this is the *why*.
+The guarantees the harness makes and the rules that shape its public surface.
+The [README](../README.md) is the tour; [`docs/reference.md`](reference.md) is
+the API manual.
 
 ## Semantic guarantees
 
-These are contracts, not conveniences — the harness is built to make them true.
-
-- **Zero fees.** The runtime charges no signature or write-lock fees; tests
-  measure compute, not economics. A balance only ever moves because a program
-  moved it.
+- **Zero fees.** The runtime charges no signature or write-lock fees. A balance
+  only moves when a program moves it.
 - **Spoofed signers need no keypairs.** Signature checks are relaxed, so a test
   names any address as a signer without producing a key. A permissionless
   transaction borrows an inert internal fee payer.
@@ -55,16 +52,12 @@ The public surface is deliberate, and these rules double as the contribution bar
   act; `account`, `logs`, `compute_units` read.
 - **`#[must_use]` where consuming is the point** — an `Outcome` you never assert
   on, a `TestBuilder` you never `build`.
-- **The public surface is snapshot-gated.** The backend is private so the test
-  API can outlast the engine beneath it; the TypeScript surface is guarded by a
-  committed snapshot (`typescript/scripts/check-public-api.mjs`).
+- **The public surface is snapshot-gated.** The backend stays private, and the
+  TypeScript surface is guarded by a committed snapshot
+  (`typescript/scripts/check-public-api.mjs`).
 
-## Relationship to LiteSVM and Mollusk
+## Parallax and LiteSVM
 
-Parallax is a **harness**, not an engine. [LiteSVM](https://github.com/LiteSVM/litesvm)
-executes the transactions; Parallax is the fixture, assertion, and
-cross-language layer on top — the part that makes a test read like a test.
-[Mollusk](https://github.com/anza-xyz/mollusk) is an alternative engine in the
-same space as LiteSVM; Parallax sits a level above either, and today drives
-LiteSVM. The backend is deliberately private so the public test API can outlast
-the engine beneath it.
+Parallax is a harness for [LiteSVM](https://github.com/LiteSVM/litesvm): LiteSVM
+executes the transactions, Parallax provides the fixtures, the assertions, and
+the cross-language layer.

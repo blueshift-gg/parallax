@@ -7,12 +7,11 @@
   -->
 </p>
 
-The TypeScript half of [Parallax](https://github.com/blueshift-gg/parallax),
-fixture-based testing for Solana programs on
-[LiteSVM](https://github.com/LiteSVM/litesvm). It is the Kit and Web3.js sibling
-of the Rust crate and a thin shell over the same Rust core — every harness
-semantic lives in the `parallax-svm-ffi` native kernel, so a program is exercised
-from three vantage points (Rust, Kit, Web3.js) that agree by construction.
+The TypeScript half of [Parallax](https://github.com/blueshift-gg/parallax), a
+fixture-based testing harness for
+[LiteSVM](https://github.com/LiteSVM/litesvm). The Kit and Web3.js adapters are
+thin shells over the same Rust core that backs the Rust crate, so all three
+harnesses share one implementation of every semantic.
 
 ```bash
 npm install --save-dev parallax-svm @solana/kit
