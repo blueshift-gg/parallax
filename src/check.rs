@@ -150,6 +150,15 @@ impl AccountValue {
 /// `check([CuBudget::le(5_000), Lamports::eq(vault, n)])`.
 pub struct Assert(Inner);
 
+impl Assert {
+    /// Wrap a closure as an `Assert`, so application-defined facts group in
+    /// the same arrays as the built-ins. This is how a crate builds its own
+    /// fact namespace on top of parallax.
+    pub fn from_fn(check: impl Fn(&Outcome) + 'static) -> Self {
+        Self(Inner::Dyn(Box::new(check)))
+    }
+}
+
 enum Inner {
     Cu(Cmp, u64),
     Account(AccountValue, Pubkey, Cmp, u64),

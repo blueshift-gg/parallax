@@ -308,6 +308,16 @@ mod tests {
         outcome(&[], 0).check(ReturnData::eq([9, 8]));
     }
 
+    // `Assert::from_fn` lifts a closure into the built-ins' concrete type, so
+    // application facts group in the same arrays.
+    #[test]
+    fn from_fn_asserts_group_with_built_ins() {
+        outcome(&[], 10).check([
+            CuBudget::le(10),
+            crate::Assert::from_fn(|o| assert_eq!(o.compute_units(), 10)),
+        ]);
+    }
+
     // A check value runs through `check` in every accepted shape: built-in
     // facts, a closure, and an array grouping several.
     #[test]
