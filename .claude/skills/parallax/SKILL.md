@@ -110,7 +110,6 @@ TS mirrors every namespace (`Cu.spent(cu => cu <= n)`, `Account.lamports(a, n)`,
 value; `CheckFn::new(|tx| ..)` (TS: any `(tx) => void`) is the whole-transaction
 escape. `succeeds()` returns the witness checks run on; `fails_with` yields a
 read-only failed witness.
-`Account::state(addr).with::<T>(|s| ..)` asserts partial facts.
 
 Reads (not asserts): `account(addr)`, `accounts()`, `logs()`, `return_value()`,
 `compute_units()`, `events(decode)`, `account_changes()`.
