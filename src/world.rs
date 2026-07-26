@@ -39,6 +39,8 @@ pub struct Test {
     pub(super) dumped_slots: Vec<u64>,
     /// Whether the mixed-slot coherence warning has already fired for this world.
     pub(super) dump_warned: bool,
+    /// Checks verified against every committed send's outcome.
+    pub(super) invariants: Vec<Box<dyn crate::Check>>,
 }
 
 impl Test {
@@ -62,6 +64,7 @@ impl Test {
             dumped_addresses: Vec::new(),
             dumped_slots: Vec::new(),
             dump_warned: false,
+            invariants: Vec::new(),
         }
     }
 
@@ -294,6 +297,18 @@ impl Test {
         self.backend.set_compute_unit_limit(limit);
     }
 
+    /// Register a [`Check`](crate::Check) verified after every committed send.
+    ///
+    /// Define a protocol invariant once and every `send` in the test enforces
+    /// it — the outcome the invariant sees is the same one the test asserts
+    /// on. Invariants also run when the send itself fails (a failed
+    /// transaction commits nothing, so a previously holding invariant still
+    /// holds); simulations never run them. An invariant sees the outcome only:
+    /// the accounts it reads must be part of the transaction it checks.
+    pub fn invariant(&mut self, check: impl crate::Check + 'static) {
+        self.invariants.push(Box::new(check));
+    }
+
     /// Execute and commit one instruction.
     pub fn send(&mut self, instruction: impl Into<Instruction>) -> Outcome {
         self.execute([instruction.into()], Vec::new(), true)
@@ -521,7 +536,14 @@ impl Test {
                     .map(|account| account.address)
             })
             .flatten();
-        Outcome::from_backend(result, tracked).with_hint(crate::dump::missing_account_hint(hint))
+        let outcome = Outcome::from_backend(result, tracked)
+            .with_hint(crate::dump::missing_account_hint(hint));
+        if commit {
+            for invariant in &self.invariants {
+                invariant.check(&outcome);
+            }
+        }
+        outcome
     }
 
     fn required_account(&self, address: Pubkey) -> Account {
@@ -574,7 +596,7 @@ where
     if let Some(first_nonzero) = cursor.iter().position(|&byte| byte != 0) {
         panic!(
             "{context} {name}: account {address} has {trailing} trailing byte(s) past the \
-             decoded {name} (first non-zero {first_nonzero} byte(s) in); read/read_at allow \
+             decoded {name} (first non-zero at tail offset {first_nonzero}); read/read_at allow \
              only zeroed reserved padding after the value — read the correct type, or frame a \
              suffix with read_at",
             trailing = cursor.len(),

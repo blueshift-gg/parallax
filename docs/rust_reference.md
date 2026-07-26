@@ -47,12 +47,12 @@ returns the address(es) it placed, so tests thread handles back instead of
 pinning addresses up front.
 
 ```rust,ignore
-let authority = test.add(Wallet::new());              // funded actor, fresh address
-let poor = test.add(Wallet::new().fund(0));           // exact balance
-let pinned = test.add(Wallet::new().at(SOME_KEY));    // specific address
+let authority = test.add(Wallet::account());             // funded actor, fresh address
+let poor = test.add(Wallet::account().fund(0));           // exact balance
+let pinned = test.add(Wallet::account().at(SOME_KEY));    // specific address
 
 let mint = test.add(
-    Mint::new()                                       // fixed-supply, 6-decimal legacy mint
+    Mint::account()                                   // fixed-supply, 6-decimal legacy mint
         .with_authority(authority)                    // ...now mintable
         .with_freeze_authority(authority)
         .supply(1_000)
@@ -61,15 +61,17 @@ let mint = test.add(
         .with_holder([(alice, 400), (bob, 600)]),     // one ATA per holder, funded
 );
 
-let vault = test.add(TokenAccount::new(mint, authority).amount(600));
-let ata = test.add(AssociatedTokenAccount::new(mint, authority).amount(400));
+let vault = test.add(TokenAccount::account(mint, authority).amount(600));
+let ata = test.add(AssociatedTokenAccount::account(mint, authority).amount(400));
 ```
 
 The built-ins are `Wallet`, `Mint`, `TokenAccount`, `AssociatedTokenAccount`,
 `Account` (a raw account — its fields are public, and it is itself a fixture),
-and `Program` (preload compiled ELF for CPI). Constructors take only what is
-conceptually required (`TokenAccount::new(mint, owner)`); everything optional is
-a builder method.
+and `Program` (preload compiled ELF for CPI). Every builder fixture enters
+through an arity verb — `account(..)` yields one address, `accounts(..)` several
+— the same grammar `Dump` and `Load` speak. Entry constructors take only what is
+conceptually required (`TokenAccount::account(mint, owner)`); everything
+optional is a builder method.
 
 ### The `accounts` plural vocabulary
 
@@ -78,20 +80,20 @@ the fixed-arity result:
 
 ```rust,ignore
 // Fresh Copy fixtures: array-repeat already works.
-let [alice, bob, carol] = test.add([Wallet::new().fund(7); 3]);
+let [alice, bob, carol] = test.add([Wallet::account().fund(7); 3]);
 
-// Pinned plural — one config applied at each named address (mirrors Dump::accounts):
+// Pinned plural — the addresses lead, one config applied at each (mirrors Dump::accounts):
 let [a, b] = test.add(Wallet::accounts([ADDR_A, ADDR_B]).fund(5_000));
-let [ta, tb] = test.add(TokenAccount::new(mint, owner).amount(42).accounts([TA, TB]));
+let [ta, tb] = test.add(TokenAccount::accounts([TA, TB], mint, owner).amount(42));
 
-// Generated plural — N distinct fresh accounts sharing one config, for a
-// non-Copy fixture the `[expr; N]` syntax cannot clone:
-let [m1, m2] = test.add(Mint::new().supply(1_000).accounts::<2>());
+// Fresh plural — N distinct mints sharing one config. N is inferred from the
+// destructuring pattern, so no count is ever written:
+let [m1, m2] = test.add(Mint::accounts().supply(1_000));
 ```
 
 `Wallet`/`TokenAccount` are `Copy`, so their *fresh* plural is just
-`[Wallet::new(); N]`; their `accounts([..])` method is the *pinned* plural.
-`Mint` is not `Copy`, so it exposes `accounts::<N>()` for the fresh plural.
+`[Wallet::account(); N]`; their `accounts([..])` entry is the *pinned* plural.
+`Mint` is not `Copy`, so `Mint::accounts()` is its fresh plural.
 `AssociatedTokenAccount` deliberately has **no** plural: an ATA address is a pure
 function of owner and mint, so "several ATAs" only means several owners — which
 is exactly `Mint::with_holder`'s job.
@@ -109,7 +111,7 @@ impl Fixture for FundedVault {
 
     fn install(self, test: &mut Test) -> Self::Output {
         let program = test.program_id();
-        let authority = test.add(Wallet::new());
+        let authority = test.add(Wallet::account());
         let vault = test.derive_pda(&[b"vault".as_ref(), authority.as_ref()]);
         test.write(vault, program, VaultState { authority, amount: self.deposit });
         (authority, vault)
@@ -184,8 +186,39 @@ test.send(withdraw)
     .has_supply(mint, 1_000)
     .has_state::<VaultState>(vault, |v| assert_eq!(v.amount, 600))
     .owned_by(vault, test.program_id())
+    .has_data(registry, &[1, 0, 0, 0])            // exact raw bytes
+    .returns(&expected_return_data)
     .is_closed(temp_account);
 ```
+
+### Checks and invariants
+
+A `Check` is a reusable assertion value — the verification dual of a fixture.
+Structs implementing `Check`, closures, and arrays or tuples of checks all
+qualify. `outcome.check(..)` runs one; `test.invariant(..)` registers one that
+runs after every committed send (never on simulations), so a protocol invariant
+is written once and enforced everywhere:
+
+```rust,ignore
+struct Solvent { pool: Pubkey }
+
+impl Check for Solvent {
+    fn check(&self, outcome: &Outcome) {
+        outcome.has_state::<Pool>(self.pool, |p| assert!(p.reserves >= p.obligations));
+    }
+}
+
+test.invariant(Solvent { pool });                 // every send now enforces it
+test.send(swap)
+    .succeeds()
+    .check([CuBudget::at_most(20_000)])           // one-off checks, grouped freely
+    .check(|o: &Outcome| assert_eq!(o.logs().len(), 3));
+```
+
+An invariant sees each send's `Outcome`, so the accounts it judges must be part
+of that transaction; guard on `outcome.account(..)` presence when an invariant
+only sometimes applies. `CuBudget::at_most(n)` is the check-shaped sibling of
+`cu_at_most` for compute budgets that travel as values.
 
 Reads pull structured data back out:
 

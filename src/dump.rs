@@ -258,27 +258,28 @@ fn write_dump_file(slot: u64, entries: &[StoredEntry]) -> Vec<u8> {
 }
 
 /// Parse a dump file, with actionable errors that name `path` and the expected
-/// format version.
+/// format version. Shared by the `Load` path and the `.parallax/` store, so the
+/// message names the file rather than either caller.
 fn read_dump_file(path: &Path, bytes: &[u8]) -> Result<DumpFile, String> {
     let display = path.display();
     if bytes.len() < DUMP_HEADER_LEN {
         return Err(format!(
-            "load: {display} is truncated — not a parallax dump file (expected format v{DUMP_FORMAT_VERSION})"
+            "{display} is truncated — not a parallax dump file (expected format v{DUMP_FORMAT_VERSION})"
         ));
     }
     if bytes[0..4] != DUMP_MAGIC {
         return Err(format!(
-            "load: {display} is not a parallax dump file (bad magic; expected format v{DUMP_FORMAT_VERSION})"
+            "{display} is not a parallax dump file (bad magic; expected format v{DUMP_FORMAT_VERSION})"
         ));
     }
     let version = u16::from_le_bytes([bytes[4], bytes[5]]);
     if version != DUMP_FORMAT_VERSION {
         return Err(format!(
-            "load: {display} is dump format v{version}, but this build reads v{DUMP_FORMAT_VERSION}; re-dump the file"
+            "{display} is dump format v{version}, but this build reads v{DUMP_FORMAT_VERSION}; re-dump the file"
         ));
     }
     let body: DumpBodyWire = wincode::deserialize_exact(&bytes[DUMP_HEADER_LEN..])
-        .map_err(|error| format!("load: {display} is corrupt or truncated: {error:?}"))?;
+        .map_err(|error| format!("{display} is corrupt or truncated: {error:?}"))?;
     let mut entries = Vec::with_capacity(body.entries.len());
     for entry in body.entries {
         entries.push(StoredEntry {

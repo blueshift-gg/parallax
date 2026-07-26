@@ -11,6 +11,7 @@ import {
 import { Address, TransactionInstruction } from "@solana/web3.js";
 import { getTokenDecoder } from "@solana-program/token";
 import {
+  CuBudget,
   DEFAULT_WALLET_LAMPORTS,
   Test as KitTest,
   account as kitAccount,
@@ -810,5 +811,72 @@ describe("determinism", () => {
     expect(first.ok.error).toBeNull();
     expect(first.ok.changes.length).toBeGreaterThan(0);
     expect(first.fail.error).not.toBeNull();
+  });
+});
+
+describe("checks and invariants", () => {
+  const amount = 1_000_000_000n;
+
+  // A check is a value: a `CuBudget`, a closure, or an array of checks runs
+  // through `check`; `invariant` registers one for every committed send, so
+  // the second over-cap transfer fails with no assertion at the call site.
+  // Simulations commit nothing and are never judged.
+  it("runs value checks and enforces registered invariants (Kit)", async () => {
+    using test = new KitTest();
+    const payer = await test.add(kitWallet());
+    const recipient = kitAddr();
+    test.invariant(outcome => {
+      const account = outcome.account(recipient);
+      if (account !== null && account.lamports > 1_500_000_000n) {
+        throw new Error(`cap exceeded: ${account.lamports} lamports`);
+      }
+    });
+
+    const transfer = (): Instruction => ({
+      programAddress: address(systemProgram),
+      accounts: [
+        { address: payer, role: AccountRole.WRITABLE_SIGNER },
+        { address: recipient, role: AccountRole.WRITABLE },
+      ],
+      data: systemTransferData(amount),
+    });
+
+    test
+      .send(transfer())
+      .succeeds()
+      .check(CuBudget.atMost(10_000))
+      .check(outcome => expect(outcome.isOk()).toBe(true))
+      .check([CuBudget.atMost(10_000)])
+      .returns([])
+      .hasData(recipient, []);
+
+    expect(() => test.send(transfer())).toThrow("cap exceeded");
+    test.simulate(transfer()).succeeds();
+  });
+
+  it("runs value checks and enforces registered invariants (Web3.js)", async () => {
+    using test = new Web3Test();
+    const payer = await test.add(web3Wallet());
+    const recipient = web3Addr();
+    test.invariant(outcome => {
+      const account = outcome.account(recipient);
+      if (account !== null && account.accountInfo.lamports > 1_500_000_000n) {
+        throw new Error(`cap exceeded: ${account.accountInfo.lamports} lamports`);
+      }
+    });
+
+    const transfer = () =>
+      new TransactionInstruction({
+        programId: new Address(systemProgram),
+        keys: [
+          { pubkey: payer, isSigner: true, isWritable: true },
+          { pubkey: recipient, isSigner: false, isWritable: true },
+        ],
+        data: systemTransferData(amount),
+      });
+
+    test.send(transfer()).succeeds().check(CuBudget.atMost(10_000)).returns([]);
+    expect(() => test.send(transfer())).toThrow("cap exceeded");
+    test.simulate(transfer()).succeeds();
   });
 });

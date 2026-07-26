@@ -1,4 +1,8 @@
 import { getMintDecoder, getTokenDecoder } from "@solana-program/token";
+
+// Stateless decoders, built once per module rather than per call.
+const tokenDecoder = getTokenDecoder();
+const mintDecoder = getMintDecoder();
 import {
   Address,
   type KeyedAccountInfo,
@@ -21,9 +25,11 @@ import {
   type WalletOptions as SharedWalletOptions,
 } from "./internal/fixture.js";
 import {
+  CuBudget,
   Outcome as SharedOutcome,
   type AccountChange as SharedAccountChange,
   type AccountCodec as SharedAccountCodec,
+  type Check as SharedCheck,
 } from "./internal/outcome.js";
 import {
   SPL_ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -37,13 +43,14 @@ import {
   type TestOptions as SharedTestOptions,
 } from "./internal/test.js";
 
-export { DEFAULT_WALLET_LAMPORTS, TokenProgram };
+export { CuBudget, DEFAULT_WALLET_LAMPORTS, TokenProgram };
 export type { ProgramError } from "./internal/outcome.js";
 export type { AssociatedTokenAccountOptions };
 
 export type Fixture<Output> = SharedFixture<Output, Test>;
 export type Outcome = SharedOutcome<Address, KeyedAccountInfo>;
 export type AccountChange = SharedAccountChange<Address, KeyedAccountInfo>;
+export type Check = SharedCheck<Address, KeyedAccountInfo>;
 export type AccountCodec<Value> = SharedAccountCodec<Value, Address>;
 export type WalletOptions = SharedWalletOptions<Address>;
 export type MintOptions = SharedMintOptions<Address>;
@@ -104,7 +111,8 @@ const adapter: HarnessAdapter<
   }),
   instructionToWire: instruction => ({
     programId: new Uint8Array(instruction.programId.toBytes()),
-    data: new Uint8Array(instruction.data),
+    // No copy: the wire serializer copies into its own buffer.
+    data: instruction.data,
     accounts: instruction.keys.map(meta => ({
       pubkey: new Uint8Array(meta.pubkey.toBytes()),
       signer: meta.isSigner,
@@ -112,9 +120,9 @@ const adapter: HarnessAdapter<
     })),
   }),
   tokenAmount: account =>
-    BigInt(getTokenDecoder().decode(account.accountInfo.data).amount),
+    BigInt(tokenDecoder.decode(account.accountInfo.data).amount),
   mintSupply: account =>
-    BigInt(getMintDecoder().decode(account.accountInfo.data).supply),
+    BigInt(mintDecoder.decode(account.accountInfo.data).supply),
   async deriveAta(owner, mint, tokenProgram) {
     return (await Address.findProgramAddress(
       [

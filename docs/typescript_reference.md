@@ -126,6 +126,8 @@ test
   .hasSupply(mint, 1_000n)
   .hasState(VaultCodec, vault, s => assert.equal(s.amount, 600n))
   .ownedBy(vault, test.programId)
+  .hasData(registry, [1, 0, 0, 0])             // exact raw bytes
+  .returns(expectedReturnData)
   .isClosed(tempAccount);
 
 const out = test.simulate(instruction);
@@ -137,6 +139,33 @@ for (const change of out.accountChanges) {     // writable before/after
   change.wasCreated();  change.wasRemoved();  change.before;  change.after;
 }
 ```
+
+### Checks and invariants
+
+A `Check` is a reusable assertion — in TypeScript, simply a function of the
+outcome. `outcome.check(..)` runs one (or an array of them);
+`test.invariant(..)` registers one that runs after every committed send (never
+on simulations), so a protocol invariant is written once and enforced
+everywhere. Mirrors Rust's `Check` trait.
+
+```ts
+import { CuBudget, type Check } from "parallax-svm/kit";
+
+const solvent: Check = outcome =>
+  outcome.hasState(PoolCodec, pool, p => assert.ok(p.reserves >= p.obligations));
+
+test.invariant(solvent);                       // every send now enforces it
+test
+  .send(swap)
+  .succeeds()
+  .check([CuBudget.atMost(20_000n)])           // one-off checks, grouped freely
+  .check(outcome => assert.equal(outcome.logs.length, 3));
+```
+
+An invariant sees each send's `Outcome`, so the accounts it judges must be part
+of that transaction; guard on `outcome.account(..)` returning `null` when an
+invariant only sometimes applies. `CuBudget.atMost(n)` is the check-shaped
+sibling of `cuAtMost` for compute budgets that travel as values.
 
 `ProgramError` is a tagged union: `{ type: "InsufficientFunds" }`,
 `{ type: "Custom"; code }`, `{ type: "Runtime"; message }`, and the rest. Assert a

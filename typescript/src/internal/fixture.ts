@@ -56,7 +56,7 @@ export interface MintOptions<Address> {
   holders?: readonly MintHolder<Address>[];
   /**
    * Install `count` fresh mints sharing this config — the count plural,
-   * mirroring Rust `Mint::accounts::<N>()`. Returns `Address[]`.
+   * mirroring Rust `Mint::accounts()`. Returns `Address[]`.
    */
   count?: number;
 }

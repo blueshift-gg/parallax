@@ -31,6 +31,10 @@ pub const PARALLAX_ERR_INVALID_WIRE: i32 = -2;
 pub const PARALLAX_ERR_PROGRAM_LOAD: i32 = -3;
 /// Transaction execution set-up failed (before the runtime ran).
 pub const PARALLAX_ERR_EXECUTION: i32 = -4;
+/// A dump or dump-file operation failed: an RPC response could not be
+/// applied, the `.parallax/` store could not be read or written, or a dump
+/// file was missing or malformed.
+pub const PARALLAX_ERR_DUMP: i32 = -6;
 /// A world handle was used from a thread other than the one that created it.
 /// Each world is owned by its creating thread; see [`crate::ffi::parallax_new`].
 pub const PARALLAX_ERR_WRONG_THREAD: i32 = -5;
@@ -43,8 +47,11 @@ thread_local! {
 
 /// Store `msg` as the current thread's last error.
 pub fn set_last_error(msg: impl Into<String>) {
+    // An interior NUL must not drop the message (the contract promises one for
+    // every failure); escape it instead.
+    let msg = msg.into().replace('\0', "\\0");
     LAST_ERROR.with(|cell| {
-        *cell.borrow_mut() = CString::new(msg.into()).ok();
+        *cell.borrow_mut() = CString::new(msg).ok();
     });
 }
 

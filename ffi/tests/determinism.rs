@@ -39,11 +39,11 @@ fn scenario() -> ScenarioBytes {
 
     // Fixtures: a funded payer, two holders, and a mint that funds each holder's
     // associated token account.
-    let payer = test.add(Wallet::new());
-    let alice = test.add(Wallet::new());
-    let bob = test.add(Wallet::new());
+    let payer = test.add(Wallet::account());
+    let alice = test.add(Wallet::account());
+    let bob = test.add(Wallet::account());
     let mint = test.add(
-        Mint::new()
+        Mint::account()
             .with_authority(payer)
             .supply(1_000)
             .token_program(TokenProgram::Legacy)

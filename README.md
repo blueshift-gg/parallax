@@ -34,7 +34,7 @@ use parallax_svm::prelude::*;
 
 #[parallax_test]
 fn deposits_into_the_vault(test: &mut Test) {
-    let authority = test.add(Wallet::new());
+    let authority = test.add(Wallet::account());
 
     test.send(DepositInstruction { authority, amount: 1_000_000_000 })
         .succeeds()
@@ -70,7 +70,7 @@ One deposit test, in Rust and in TypeScript.
 // Rust
 #[parallax_test]
 fn deposits(test: &mut Test) {
-    let user = test.add(Wallet::new());
+    let user = test.add(Wallet::account());
 
     test.send(DepositInstruction { user, amount: 1_000 })
         .succeeds()
@@ -101,10 +101,10 @@ A fixture is any value implementing `Fixture`; `test.add` installs it and return
 the address(es) it placed — the only composition primitive.
 
 ```rust,ignore
-let [alice, bob] = test.add([Wallet::new().fund(7); 2]);   // two fresh funded actors
+let [alice, bob] = test.add([Wallet::account().fund(7); 2]); // two fresh funded actors
 
 let mint = test.add(
-    Mint::new()
+    Mint::account()
         .with_authority(alice)
         .with_holder([(alice, 400), (bob, 600)]),          // one funded ATA per holder
 );
@@ -173,7 +173,7 @@ is under test is the program's *own* authorization, not the runtime's.
 
 ```rust,ignore
 // Prove the program rejects an attacker who merely *claims* to be the authority.
-let attacker = test.add(Wallet::new());
+let attacker = test.add(Wallet::account());
 let mut forged: Instruction = WithdrawInstruction { vault }.into();
 forged.accounts.push(AccountMeta::new_readonly(attacker, true));  // spoofed signer
 

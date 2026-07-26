@@ -155,7 +155,9 @@ describe.skipIf(!programPath)("vault program parity", () => {
     ]);
     expect(deposit.accountChanges[1]?.before).toBeNull();
     expect(deposit.accountChanges[1]?.wasCreated()).toBe(true);
+    expect(deposit.accountChanges[1]?.wasRemoved()).toBe(false);
     expect(deposit.accountChanges[0]?.wasCreated()).toBe(false);
+    expect(deposit.accountChanges[0]?.wasRemoved()).toBe(false);
 
     test.setAccount({
       accountId: vault,

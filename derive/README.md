@@ -9,7 +9,7 @@ use parallax_svm::prelude::*;
 
 #[parallax_test]
 fn initializes(test: &mut Test) {
-    let authority = test.add(Wallet::new());
+    let authority = test.add(Wallet::account());
     test.send(InitializeInstruction { authority }).succeeds();
 }
 ```

@@ -221,7 +221,7 @@ pub extern "C" fn parallax_install_wallet(
     with_install(handle, input, input_len, address_out, |test, bytes| {
         let input = wire::deserialize_wallet_input(bytes)
             .map_err(|e| format!("invalid wallet input: {e}"))?;
-        let mut wallet = Wallet::new();
+        let mut wallet = Wallet::account();
         if let Some(address) = input.address {
             wallet = wallet.at(address);
         }
@@ -244,7 +244,7 @@ pub extern "C" fn parallax_install_token_account(
     with_install(handle, input, input_len, address_out, |test, bytes| {
         let input = wire::deserialize_token_account_input(bytes)
             .map_err(|e| format!("invalid token account input: {e}"))?;
-        let mut account = TokenAccount::new(input.mint, input.owner)
+        let mut account = TokenAccount::account(input.mint, input.owner)
             .amount(input.amount)
             .token_program(input.token_program);
         if let Some(address) = input.address {
@@ -266,7 +266,7 @@ pub extern "C" fn parallax_install_ata(
     with_install(handle, input, input_len, address_out, |test, bytes| {
         let input =
             wire::deserialize_ata_input(bytes).map_err(|e| format!("invalid ata input: {e}"))?;
-        let account = AssociatedTokenAccount::new(input.mint, input.owner)
+        let account = AssociatedTokenAccount::account(input.mint, input.owner)
             .amount(input.amount)
             .token_program(input.token_program);
         Ok(test.add(account))
@@ -306,11 +306,6 @@ pub extern "C" fn parallax_install_mint(
     result_out: *mut *mut u8,
     result_len_out: *mut u64,
 ) -> i32 {
-    if result_out.is_null() || result_len_out.is_null() {
-        clear_last_error();
-        set_last_error("null result pointer argument");
-        return PARALLAX_ERR_NULL_POINTER;
-    }
     with_result(
         handle,
         input,
@@ -319,9 +314,9 @@ pub extern "C" fn parallax_install_mint(
         result_len_out,
         |test, bytes| {
             let input = wire::deserialize_mint_input(bytes)
-                .map_err(|e| format!("invalid mint input: {e}"))?;
+                .map_err(|e| Failure::wire(format!("invalid mint input: {e}")))?;
             let token_program = input.token_program;
-            let mut mint = Mint::new()
+            let mut mint = Mint::account()
                 .supply(input.supply)
                 .decimals(input.decimals)
                 .token_program(token_program)
@@ -461,13 +456,15 @@ pub extern "C" fn parallax_dump_plan(
         result_len_out,
         |test, bytes| {
             let input = wire::deserialize_dump_plan_input(bytes)
-                .map_err(|e| format!("invalid dump plan input: {e}"))?;
-            let plan = test.dump_plan(
-                &input.project_dir,
-                &input.targets,
-                input.sync_clock,
-                input.refresh,
-            )?;
+                .map_err(|e| Failure::wire(format!("invalid dump plan input: {e}")))?;
+            let plan = test
+                .dump_plan(
+                    &input.project_dir,
+                    &input.targets,
+                    input.sync_clock,
+                    input.refresh,
+                )
+                .map_err(Failure::dump)?;
             Ok(wire::serialize_dump_plan(&plan))
         },
     )
@@ -479,13 +476,14 @@ pub extern "C" fn parallax_dump_plan(
 pub extern "C" fn parallax_dump_commit(handle: *mut Test, input: *const u8, input_len: u64) -> i32 {
     with_input_status(handle, input, input_len, |test, bytes| {
         let input = wire::deserialize_dump_commit_input(bytes)
-            .map_err(|e| format!("invalid dump commit input: {e}"))?;
+            .map_err(|e| Failure::wire(format!("invalid dump commit input: {e}")))?;
         test.dump_commit(
             &input.project_dir,
             &input.misses,
             &input.response_body,
             input.sync_clock,
         )
+        .map_err(Failure::dump)
     })
 }
 
@@ -508,8 +506,10 @@ pub extern "C" fn parallax_load(
         result_len_out,
         |test, bytes| {
             let input = wire::deserialize_load_input(bytes)
-                .map_err(|e| format!("invalid load input: {e}"))?;
-            let addresses = test.load_dump(&input.path, input.is_program)?;
+                .map_err(|e| Failure::wire(format!("invalid load input: {e}")))?;
+            let addresses = test
+                .load_dump(&input.path, input.is_program)
+                .map_err(Failure::dump)?;
             Ok(wire::serialize_pubkeys(&addresses))
         },
     )
@@ -523,7 +523,7 @@ pub extern "C" fn parallax_load(
 /// `body` for its side effects, returning a status code with no result blob.
 fn with_input_status<F>(handle: *mut Test, input: *const u8, input_len: u64, body: F) -> i32
 where
-    F: FnOnce(&mut Test, &[u8]) -> Result<(), String>,
+    F: FnOnce(&mut Test, &[u8]) -> Result<(), Failure>,
 {
     clear_last_error();
     let handle = match resolve(handle) {
@@ -536,12 +536,12 @@ where
     };
     match catch_unwind(AssertUnwindSafe(|| body(&mut handle.test, bytes))) {
         Ok(Ok(())) => PARALLAX_OK,
-        Ok(Err(message)) => {
+        Ok(Err(Failure(code, message))) => {
             set_last_error(message);
-            PARALLAX_ERR_INVALID_WIRE
+            code
         }
         Err(_) => {
-            set_last_error("panic during dump");
+            set_last_error("panic at FFI boundary");
             PARALLAX_ERR_INTERNAL
         }
     }
@@ -640,19 +640,38 @@ where
     }
 }
 
-/// Shared body for installs that return a variable-length blob.
+/// A boundary failure: the status to return and the message to store.
+struct Failure(i32, String);
+
+impl Failure {
+    /// A wire buffer did not decode.
+    fn wire(message: impl Into<String>) -> Self {
+        Self(PARALLAX_ERR_INVALID_WIRE, message.into())
+    }
+
+    /// A dump, store, or dump-file operation failed.
+    fn dump(message: impl Into<String>) -> Self {
+        Self(PARALLAX_ERR_DUMP, message.into())
+    }
+}
+
+/// Shared body for calls that return a variable-length blob.
 fn with_result<F>(
     handle: *mut Test,
     input: *const u8,
     input_len: u64,
     result_out: *mut *mut u8,
     result_len_out: *mut u64,
-    install: F,
+    body: F,
 ) -> i32
 where
-    F: FnOnce(&mut Test, &[u8]) -> Result<Box<[u8]>, String>,
+    F: FnOnce(&mut Test, &[u8]) -> Result<Box<[u8]>, Failure>,
 {
     clear_last_error();
+    if result_out.is_null() || result_len_out.is_null() {
+        set_last_error("null result pointer argument");
+        return PARALLAX_ERR_NULL_POINTER;
+    }
     let handle = match resolve(handle) {
         Ok(handle) => handle,
         Err(code) => return code,
@@ -661,17 +680,17 @@ where
         Ok(bytes) => bytes,
         Err(code) => return code,
     };
-    match catch_unwind(AssertUnwindSafe(|| install(&mut handle.test, bytes))) {
+    match catch_unwind(AssertUnwindSafe(|| body(&mut handle.test, bytes))) {
         Ok(Ok(blob)) => {
             write_result(result_out, result_len_out, blob);
             PARALLAX_OK
         }
-        Ok(Err(message)) => {
+        Ok(Err(Failure(code, message))) => {
             set_last_error(message);
-            PARALLAX_ERR_INVALID_WIRE
+            code
         }
         Err(_) => {
-            set_last_error("panic during install");
+            set_last_error("panic at FFI boundary");
             PARALLAX_ERR_INTERNAL
         }
     }
@@ -698,13 +717,9 @@ fn execute(
         Err(code) => return code,
     };
     let ix_bytes = unsafe { slice::from_raw_parts(instructions, instructions_len as usize) };
-    let acct_bytes = match (accounts.is_null(), accounts_len) {
-        (true, 0) => &[][..],
-        (true, _) => {
-            set_last_error("null accounts pointer with non-zero length");
-            return PARALLAX_ERR_NULL_POINTER;
-        }
-        (false, len) => unsafe { slice::from_raw_parts(accounts, len as usize) },
+    let acct_bytes = match input_bytes(accounts, accounts_len) {
+        Ok(bytes) => bytes,
+        Err(code) => return code,
     };
     match catch_unwind(AssertUnwindSafe(|| {
         let ixs = match wire::deserialize_instructions(ix_bytes) {

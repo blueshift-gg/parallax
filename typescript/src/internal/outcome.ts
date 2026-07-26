@@ -68,8 +68,44 @@ export interface AccountCodec<Value, Address> {
   size?: number;
 }
 
+/**
+ * A reusable assertion over an outcome, throwing when it does not hold — the
+ * verification dual of a fixture. Runs one-off through `Outcome.check`, or on
+ * every committed send once registered with `Test.invariant`. Mirrors the Rust
+ * `Check` trait; in TypeScript a check is simply a function.
+ */
+export type Check<Address, Account> = (
+  outcome: Outcome<Address, Account>,
+) => void;
+
+/**
+ * A compute-unit budget as a check value: the check-shaped sibling of
+ * `cuAtMost`, for budgets that are passed around, grouped with other checks,
+ * or registered as invariants. Mirrors Rust `CuBudget`.
+ */
+export const CuBudget = {
+  /** Budget an inclusive compute-unit ceiling. */
+  atMost(limit: bigint | number): Check<unknown, unknown> {
+    const ceiling = BigInt(limit);
+    return outcome => {
+      if (outcome.computeUnits > ceiling) {
+        throw new Error(
+          `CU budget exceeded: expected at most ${ceiling}, consumed ${outcome.computeUnits}`,
+        );
+      }
+    };
+  },
+};
+
 function describeBytes(bytes: Uint8Array): string {
   return `[${Array.from(bytes).join(", ")}]`;
+}
+
+function bytesEqual(actual: Uint8Array, expected: ArrayLike<number>): boolean {
+  return (
+    actual.length === expected.length &&
+    actual.every((byte, index) => byte === expected[index])
+  );
 }
 
 /**
@@ -202,6 +238,42 @@ export class Outcome<Address, Account> {
 
   failsWith(code: number): this {
     return this.fails({ type: "Custom", code });
+  }
+
+  /**
+   * Run a reusable check — or an array of them — against this outcome.
+   * Chainable. For a check verified after *every* committed send, register it
+   * once with `Test.invariant` instead. Mirrors Rust `Outcome::check`.
+   */
+  check(
+    check: Check<Address, Account> | readonly Check<Address, Account>[],
+  ): this {
+    for (const one of Array.isArray(check) ? check : [check]) one(this);
+    return this;
+  }
+
+  /** Assert the transaction's exact return data. */
+  returns(expected: Uint8Array | readonly number[]): this {
+    if (!bytesEqual(this.returnData, expected)) {
+      throw new Error(
+        `unexpected return data: expected ${describeBytes(Uint8Array.from(expected))}, got ${describeBytes(this.returnData)}${this.formattedLogs()}`,
+      );
+    }
+    return this;
+  }
+
+  /**
+   * Assert a resulting account's exact raw data bytes: the raw sibling of
+   * `hasState`, for fixed byte images and accounts without a codec.
+   */
+  hasData(address: Address, expected: Uint8Array | readonly number[]): this {
+    const data = this.adapter.accountData(this.requiredAccount(address));
+    if (!bytesEqual(data, expected)) {
+      throw new Error(
+        `unexpected account data for ${this.adapter.renderAddress(address)}: expected ${describeBytes(Uint8Array.from(expected))}, got ${describeBytes(data)}`,
+      );
+    }
+    return this;
   }
 
   cuAtMost(limit: bigint | number): this {

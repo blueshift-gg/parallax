@@ -10,7 +10,7 @@ use {
 /// Applications can implement this trait for protocol-level fixtures and
 /// compose the built-in account fixtures inside [`Fixture::install`]. Arrays
 /// of one fixture type are fixtures too, so repeated setup can be installed
-/// with `test.add([Wallet::new(); 3])`. Each fixture returns the address it
+/// with `test.add([Wallet::account(); 3])`. Each fixture returns the address it
 /// placed, so tests thread those handles instead of pinning addresses up front.
 pub trait Fixture {
     /// Handle or state returned after installation.
@@ -57,8 +57,9 @@ pub struct Wallet {
 }
 
 impl Wallet {
-    /// Create a wallet with [`crate::DEFAULT_WALLET_LAMPORTS`].
-    pub fn new() -> Self {
+    /// One wallet with [`crate::DEFAULT_WALLET_LAMPORTS`] at the world's next
+    /// deterministic address.
+    pub fn account() -> Self {
         Self {
             address: None,
             lamports: crate::DEFAULT_WALLET_LAMPORTS,
@@ -78,11 +79,11 @@ impl Wallet {
     }
 
     /// Install one wallet at *each* of `addresses`, returning them in order —
-    /// the plural of [`Wallet`], mirroring [`Dump::accounts`]:
+    /// the plural of [`Wallet::account`], mirroring [`Dump::accounts`]:
     /// `let [alice, bob] = test.add(Wallet::accounts([ALICE, BOB]).fund(5_000))`.
     ///
     /// Configure the shared balance on the returned builder; it applies to every
-    /// wallet. For `N` *fresh* wallets, `[Wallet::new().fund(7); N]` already
+    /// wallet. For `N` *fresh* wallets, `[Wallet::account().fund(7); N]` already
     /// works ([`Wallet`] is `Copy`).
     pub fn accounts<const N: usize>(addresses: [Pubkey; N]) -> Wallets<N> {
         Wallets {
@@ -118,12 +119,6 @@ impl<const N: usize> Fixture for Wallets<N> {
     }
 }
 
-impl Default for Wallet {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Fixture for Wallet {
     type Output = Pubkey;
 
@@ -155,7 +150,7 @@ impl TokenProgram {
 
 /// An initialized token mint.
 ///
-/// A bare [`Mint::new`] has no mint authority, modelling a fixed-supply mint.
+/// A bare [`Mint::account`] has no mint authority, modelling a fixed-supply mint.
 /// [`Self::with_authority`] makes it mintable and [`Self::with_freeze_authority`]
 /// installs a freeze authority. [`Self::with_holder`] additionally installs one
 /// associated-token account per holder, so a funded mint and its holders can be
@@ -171,11 +166,12 @@ pub struct Mint {
 }
 
 impl Mint {
-    /// Create a six-decimal legacy Token mint with zero supply and no mint or
-    /// freeze authority. Without [`Self::with_authority`] the mint is
-    /// fixed-supply (its `mint_authority` is `COption::None`). Installing the
-    /// mint returns its address, so tests read that back rather than pinning it.
-    pub fn new() -> Self {
+    /// One six-decimal legacy Token mint with zero supply and no mint or
+    /// freeze authority, at the world's next deterministic address. Without
+    /// [`Self::with_authority`] the mint is fixed-supply (its `mint_authority`
+    /// is `COption::None`). Installing the mint returns its address, so tests
+    /// read that back rather than pinning it.
+    pub fn account() -> Self {
         Self {
             authority: None,
             freeze_authority: None,
@@ -184,6 +180,18 @@ impl Mint {
             token_program: TokenProgram::Legacy,
             holders: Vec::new(),
         }
+    }
+
+    /// `N` fresh mints sharing one configuration, returned as `[Pubkey; N]` —
+    /// the plural of [`Mint::account`]. `N` is inferred from the destructuring
+    /// pattern, so no count is ever written:
+    /// `let [a, b] = test.add(Mint::accounts().supply(1_000));`.
+    ///
+    /// Each mint is placed at its own deterministic address, so the `N`
+    /// addresses are distinct. The returned builder takes the same options as
+    /// [`Mint::account`], applied to every mint.
+    pub fn accounts<const N: usize>() -> Mints<N> {
+        Mints(Mint::account())
     }
 
     /// Set the mint authority, making the mint mintable. Left unset, the mint
@@ -228,35 +236,56 @@ impl Mint {
         self.holders.extend(holders);
         self
     }
-
-    /// Install `N` fresh mints with this configuration, returning their addresses
-    /// as `[Pubkey; N]`: `let [a, b] = test.add(Mint::new().supply(1_000).accounts::<2>())`.
-    ///
-    /// The plural of [`Mint`], mirroring [`Dump::accounts`]. Each mint is placed
-    /// at its own deterministic address, so the `N` addresses are distinct. This
-    /// is the plural for [`Mint`], which is not `Copy` and so cannot use the
-    /// `[expr; N]` array-repeat syntax; configuration is applied first and shared
-    /// by every mint.
-    pub fn accounts<const N: usize>(self) -> Mints<N> {
-        Mints(self)
-    }
 }
 
 /// The [`Mint::accounts`] fixture: `N` fresh mints sharing one configuration.
+/// Takes the same options as [`Mint::account`], applied to every mint.
 #[derive(Debug, Clone)]
 pub struct Mints<const N: usize>(Mint);
+
+impl<const N: usize> Mints<N> {
+    /// Set the mint authority on every mint; see [`Mint::with_authority`].
+    pub fn with_authority(mut self, authority: Pubkey) -> Self {
+        self.0 = self.0.with_authority(authority);
+        self
+    }
+
+    /// Set the freeze authority on every mint; see [`Mint::with_freeze_authority`].
+    pub fn with_freeze_authority(mut self, freeze_authority: Pubkey) -> Self {
+        self.0 = self.0.with_freeze_authority(freeze_authority);
+        self
+    }
+
+    /// Set the initial supply of every mint; see [`Mint::supply`].
+    pub fn supply(mut self, supply: u64) -> Self {
+        self.0 = self.0.supply(supply);
+        self
+    }
+
+    /// Set the precision of every mint; see [`Mint::decimals`].
+    pub fn decimals(mut self, decimals: u8) -> Self {
+        self.0 = self.0.decimals(decimals);
+        self
+    }
+
+    /// Select the token program owning every mint; see [`Mint::token_program`].
+    pub fn token_program(mut self, token_program: TokenProgram) -> Self {
+        self.0 = self.0.token_program(token_program);
+        self
+    }
+
+    /// Fund holders of every mint; see [`Mint::with_holder`].
+    pub fn with_holder(mut self, holders: impl IntoIterator<Item = (Pubkey, u64)>) -> Self {
+        self.0 = self.0.with_holder(holders);
+        self
+    }
+}
 
 impl<const N: usize> Fixture for Mints<N> {
     type Output = [Pubkey; N];
 
     fn install(self, test: &mut Test) -> Self::Output {
         install_clones(&self.0, test)
-    }
-}
-
-impl Default for Mint {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -296,14 +325,33 @@ pub struct TokenAccount {
 }
 
 impl TokenAccount {
-    /// Create an empty legacy Token account for `mint`, owned by `owner`.
-    pub fn new(mint: Pubkey, owner: Pubkey) -> Self {
+    /// One empty legacy Token account for `mint`, owned by `owner`, at the
+    /// world's next deterministic address.
+    pub fn account(mint: Pubkey, owner: Pubkey) -> Self {
         Self {
             address: None,
             mint,
             owner,
             amount: 0,
             token_program: TokenProgram::Legacy,
+        }
+    }
+
+    /// Install one token account at *each* of `addresses` for `mint`, owned by
+    /// `owner`, returning the addresses in order — the plural of
+    /// [`TokenAccount::account`], leading with the addresses like
+    /// [`Dump::accounts`]. The returned builder takes the same options,
+    /// applied to every account. For `N` *fresh* token accounts,
+    /// `[TokenAccount::account(mint, owner); N]` already works
+    /// ([`TokenAccount`] is `Copy`).
+    pub fn accounts<const N: usize>(
+        addresses: [Pubkey; N],
+        mint: Pubkey,
+        owner: Pubkey,
+    ) -> TokenAccounts<N> {
+        TokenAccounts {
+            account: Self::account(mint, owner),
+            addresses,
         }
     }
 
@@ -324,26 +372,29 @@ impl TokenAccount {
         self.token_program = token_program;
         self
     }
-
-    /// Install one token account (this mint, owner, amount, token program) at
-    /// *each* of `addresses`, returning them in order — the plural of
-    /// [`TokenAccount`], mirroring [`Dump::accounts`]. Configuration comes first
-    /// (through [`TokenAccount::new`] and the builders); the addresses last. For
-    /// `N` *fresh* token accounts, `[TokenAccount::new(mint, owner); N]` already
-    /// works ([`TokenAccount`] is `Copy`).
-    pub fn accounts<const N: usize>(self, addresses: [Pubkey; N]) -> TokenAccounts<N> {
-        TokenAccounts {
-            account: self,
-            addresses,
-        }
-    }
 }
 
-/// The [`TokenAccount::accounts`] fixture: one token account per pinned address.
+/// The [`TokenAccount::accounts`] fixture: one token account per pinned
+/// address, sharing one configuration.
 #[derive(Debug, Clone)]
 pub struct TokenAccounts<const N: usize> {
     account: TokenAccount,
     addresses: [Pubkey; N],
+}
+
+impl<const N: usize> TokenAccounts<N> {
+    /// Set the balance of every account; see [`TokenAccount::amount`].
+    pub fn amount(mut self, amount: u64) -> Self {
+        self.account = self.account.amount(amount);
+        self
+    }
+
+    /// Select the token program owning every account; see
+    /// [`TokenAccount::token_program`].
+    pub fn token_program(mut self, token_program: TokenProgram) -> Self {
+        self.account = self.account.token_program(token_program);
+        self
+    }
 }
 
 impl<const N: usize> Fixture for TokenAccounts<N> {
@@ -394,8 +445,9 @@ pub struct AssociatedTokenAccount {
 }
 
 impl AssociatedTokenAccount {
-    /// Create an empty legacy associated-token account.
-    pub fn new(mint: Pubkey, owner: Pubkey) -> Self {
+    /// One empty legacy associated-token account for `mint` and `owner`, at
+    /// their derived associated-token address.
+    pub fn account(mint: Pubkey, owner: Pubkey) -> Self {
         Self {
             mint,
             owner,

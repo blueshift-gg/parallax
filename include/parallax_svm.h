@@ -31,6 +31,13 @@
 #define PARALLAX_ERR_EXECUTION -4
 
 /**
+ * A dump or dump-file operation failed: an RPC response could not be
+ * applied, the `.parallax/` store could not be read or written, or a dump
+ * file was missing or malformed.
+ */
+#define PARALLAX_ERR_DUMP -6
+
+/**
  * A world handle was used from a thread other than the one that created it.
  * Each world is owned by its creating thread; see [`crate::ffi::parallax_new`].
  */

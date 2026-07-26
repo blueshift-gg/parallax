@@ -613,7 +613,7 @@ mod bench {
             .no_program()
             .build()
             .expect("program-less world builds");
-        let payer = test.add(Wallet::new().fund(u64::MAX));
+        let payer = test.add(Wallet::account().fund(u64::MAX));
         let recipient = Pubkey::new_from_array([9; 32]);
         if data_len > 0 {
             // A system-owned account the transfer credits; its data rides the

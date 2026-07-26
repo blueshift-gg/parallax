@@ -189,14 +189,45 @@ impl Outcome {
         self
     }
 
-    /// Assert an inclusive compute-unit ceiling.
-    pub fn cu_at_most(&self, limit: u64) -> &Self {
-        assert!(
-            self.compute_units <= limit,
-            "expected at most {limit} compute units, consumed {}",
-            self.compute_units
+    /// Run a reusable [`Check`](crate::Check) against this outcome. Chainable.
+    ///
+    /// Accepts a check struct, a closure, or an array or tuple of checks:
+    /// `outcome.check([CuBudget::at_most(10_000)])`. For a check verified after
+    /// *every* committed send, register it once with
+    /// [`Test::invariant`](crate::Test::invariant) instead.
+    pub fn check(&self, check: impl crate::Check) -> &Self {
+        check.check(self);
+        self
+    }
+
+    /// Assert the transaction's exact return data.
+    pub fn returns(&self, expected: &[u8]) -> &Self {
+        assert_eq!(
+            self.return_data,
+            expected,
+            "unexpected return data{}",
+            self.formatted_logs()
         );
         self
+    }
+
+    /// Assert a resulting account's exact raw data bytes.
+    ///
+    /// The raw sibling of [`Self::has_state`], for fixed byte images and
+    /// accounts without a typed schema.
+    pub fn has_data(&self, address: Pubkey, expected: &[u8]) -> &Self {
+        assert_eq!(
+            self.required_account(address).data,
+            expected,
+            "unexpected account data for {address}"
+        );
+        self
+    }
+
+    /// Assert an inclusive compute-unit ceiling. The check-value equivalent is
+    /// [`CuBudget::at_most`](crate::CuBudget::at_most), which this delegates to.
+    pub fn cu_at_most(&self, limit: u64) -> &Self {
+        self.check(crate::CuBudget::at_most(limit))
     }
 
     /// Assert a resulting lamport balance.
@@ -330,7 +361,7 @@ pub(crate) fn mint_supply(account: &Account) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, crate::CuBudget};
 
     fn outcome(logs: &[&str], compute_units: u64) -> Outcome {
         Outcome {
@@ -366,6 +397,36 @@ mod tests {
     #[test]
     fn compute_unit_ceiling_is_inclusive() {
         outcome(&[], 10).cu_at_most(10);
+    }
+
+    #[test]
+    fn returns_asserts_exact_return_data() {
+        outcome(&[], 0).returns(&[9, 8, 7]);
+    }
+
+    #[test]
+    #[should_panic(expected = "unexpected return data")]
+    fn returns_rejects_different_bytes() {
+        outcome(&[], 0).returns(&[9, 8]);
+    }
+
+    // A check value runs through `check` in every accepted shape: a struct
+    // (`CuBudget`), a closure, and an array grouping several.
+    #[test]
+    fn check_accepts_structs_closures_and_arrays() {
+        let ran = core::cell::Cell::new(false);
+        outcome(&[], 10)
+            .check(CuBudget::at_most(10))
+            .check(|o: &Outcome| assert_eq!(o.compute_units(), 10))
+            .check([CuBudget::at_most(10), CuBudget::at_most(11)])
+            .check(|_: &Outcome| ran.set(true));
+        assert!(ran.get(), "closure checks must run");
+    }
+
+    #[test]
+    #[should_panic(expected = "CU budget exceeded")]
+    fn check_surfaces_a_failing_budget() {
+        outcome(&[], 10).check(CuBudget::at_most(9));
     }
 
     // A minimal wincode account type: a discriminator-free struct whose schema
@@ -426,6 +487,25 @@ mod tests {
         outcome.has_state::<Counter>(address, |_| {
             unreachable!("the decode fails before the check runs")
         });
+    }
+
+    #[test]
+    fn has_data_asserts_exact_raw_bytes() {
+        let address = Pubkey::new_from_array([5; 32]);
+        let owner = Pubkey::new_from_array([9; 32]);
+        let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
+
+        outcome.has_data(address, &[1, 2, 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "unexpected account data")]
+    fn has_data_rejects_different_bytes() {
+        let address = Pubkey::new_from_array([5; 32]);
+        let owner = Pubkey::new_from_array([9; 32]);
+        let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
+
+        outcome.has_data(address, &[1, 2]);
     }
 
     #[test]

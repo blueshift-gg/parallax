@@ -12,12 +12,12 @@
 //!
 //! #[parallax_test]
 //! fn initializes(test: &mut Test) {
-//!     let authority = test.add(Wallet::new());
+//!     let authority = test.add(Wallet::account());
 //!     test.send(InitializeInstruction { authority }).succeeds();
 //! }
 //! ```
 //!
-//! [`fixture::Wallet::new`] funds an actor with the default balance;
+//! [`fixture::Wallet::account`] funds an actor with the default balance;
 //! [`fixture::Wallet::fund`] sets an exact one. Any signer a transaction names
 //! but never installs is auto-funded on send, so co-signers cost nothing extra.
 //!
@@ -44,6 +44,7 @@
 
 mod accounts;
 mod backend;
+mod check;
 mod dump;
 pub mod fixture;
 mod outcome;
@@ -56,6 +57,7 @@ mod world;
 pub use dump::DumpPlan;
 
 pub use {
+    check::{Check, CuBudget},
     outcome::Outcome,
     parallax_svm_derive::parallax_test,
     setup::{SetupError, TestBuilder, PROGRAM_PATH_ENV},
@@ -100,8 +102,8 @@ pub mod prelude {
             AssociatedTokenAccount, Dump, Fixture, Load, Mint, Program, TokenAccount, TokenProgram,
             Wallet,
         },
-        parallax_test, system_program, Account, AccountChange, AccountMeta, Instruction, Outcome,
-        ProgramError, Pubkey, Snapshot, Test, DEFAULT_WALLET_LAMPORTS,
+        parallax_test, system_program, Account, AccountChange, AccountMeta, Check, CuBudget,
+        Instruction, Outcome, ProgramError, Pubkey, Snapshot, Test, DEFAULT_WALLET_LAMPORTS,
         SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
     };
 }
@@ -114,8 +116,8 @@ mod tests {
             co_signers,
             fixture::{AssociatedTokenAccount, Fixture, Mint, TokenAccount, TokenProgram, Wallet},
             setup::resolve_program_path_from_named,
-            system_program, Account, AccountMeta, Instruction, ProgramError, Pubkey, SetupError,
-            Test, DEFAULT_WALLET_LAMPORTS, SPL_TOKEN_2022_PROGRAM_ID,
+            system_program, Account, AccountMeta, Check, Instruction, Outcome, ProgramError,
+            Pubkey, SetupError, Test, DEFAULT_WALLET_LAMPORTS, SPL_TOKEN_2022_PROGRAM_ID,
         },
         spl_token::solana_program::program_option::COption,
         std::{fs, path::PathBuf},
@@ -203,21 +205,21 @@ mod tests {
     #[test]
     fn fixtures_are_deterministic_and_compose() {
         let mut test = empty_test();
-        let wallet = test.add(Wallet::new().fund(42));
+        let wallet = test.add(Wallet::account().fund(42));
         let mint = test.add(
-            Mint::new()
+            Mint::account()
                 .with_authority(wallet)
                 .supply(1_000)
                 .decimals(9)
                 .token_program(TokenProgram::Token2022),
         );
         let tokens = test.add(
-            TokenAccount::new(mint, wallet)
+            TokenAccount::account(mint, wallet)
                 .amount(600)
                 .token_program(TokenProgram::Token2022),
         );
         let associated = test.add(
-            AssociatedTokenAccount::new(mint, wallet)
+            AssociatedTokenAccount::account(mint, wallet)
                 .amount(400)
                 .token_program(TokenProgram::Token2022),
         );
@@ -236,7 +238,7 @@ mod tests {
     #[test]
     fn arrays_install_repeated_fixtures_without_helper_methods() {
         let mut test = empty_test();
-        let [alice, bob, carol] = test.add([Wallet::new().fund(7); 3]);
+        let [alice, bob, carol] = test.add([Wallet::account().fund(7); 3]);
 
         assert_eq!(test.lamports(alice), 7);
         assert_eq!(test.lamports(bob), 7);
@@ -245,14 +247,15 @@ mod tests {
         assert_ne!(bob, carol);
     }
 
-    // The generated-address plural (`Mint::accounts::<N>()`) installs N distinct
+    // The generated-address plural (`Mint::accounts()`) installs N distinct
     // mints with one shared config — the plural for a non-`Copy` fixture, which
-    // the `[expr; N]` array-repeat syntax cannot express.
+    // the `[expr; N]` array-repeat syntax cannot express. N is inferred from
+    // the destructuring pattern; no count is written anywhere.
     #[test]
     fn accounts_const_generic_installs_n_distinct_fresh_fixtures() {
         let mut test = empty_test();
 
-        let [first, second] = test.add(Mint::new().supply(1_000).accounts::<2>());
+        let [first, second] = test.add(Mint::accounts().supply(1_000));
         assert_ne!(first, second);
         assert_eq!(test.supply(first), 1_000);
         assert_eq!(test.supply(second), 1_000);
@@ -273,15 +276,12 @@ mod tests {
         assert_eq!(test.lamports(b), 5_000);
 
         // TokenAccount::accounts carries mint/owner/amount to each pinned address.
-        let mint = test.add(Mint::new().supply(1_000));
-        let owner = test.add(Wallet::new());
+        let mint = test.add(Mint::account().supply(1_000));
+        let owner = test.add(Wallet::account());
         let ta_a = Pubkey::new_from_array([20; 32]);
         let ta_b = Pubkey::new_from_array([21; 32]);
-        let [first, second] = test.add(
-            TokenAccount::new(mint, owner)
-                .amount(42)
-                .accounts([ta_a, ta_b]),
-        );
+        let [first, second] =
+            test.add(TokenAccount::accounts([ta_a, ta_b], mint, owner).amount(42));
         assert_eq!([first, second], [ta_a, ta_b]);
         assert_eq!(test.tokens(ta_a), 42);
         assert_eq!(test.tokens(ta_b), 42);
@@ -295,7 +295,7 @@ mod tests {
             type Output = (Pubkey, Pubkey);
 
             fn install(self, test: &mut Test) -> Self::Output {
-                let authority = test.add(Wallet::new());
+                let authority = test.add(Wallet::account());
                 let state = Pubkey::new_from_array([200; 32]);
                 test.add(Account::new(state, test.program_id(), 1, vec![1, 2, 3]));
                 (authority, state)
@@ -318,12 +318,12 @@ mod tests {
     #[test]
     fn with_holder_installs_one_associated_account_per_holder() {
         let mut test = empty_test();
-        let authority = test.add(Wallet::new());
-        let alice = test.add(Wallet::new());
-        let bob = test.add(Wallet::new());
+        let authority = test.add(Wallet::account());
+        let alice = test.add(Wallet::account());
+        let bob = test.add(Wallet::account());
 
         let mint = test.add(
-            Mint::new()
+            Mint::account()
                 .with_authority(authority)
                 .supply(1_000)
                 .token_program(TokenProgram::Token2022)
@@ -362,7 +362,7 @@ mod tests {
         use spl_token::{solana_program::program_pack::Pack, state::Mint as SplMint};
 
         let mut test = empty_test();
-        let mint = test.add(Mint::new().supply(1_000));
+        let mint = test.add(Mint::account().supply(1_000));
         let decoded = SplMint::unpack(&test.account(mint).unwrap().data).unwrap();
 
         assert_eq!(decoded.mint_authority, COption::None);
@@ -378,7 +378,7 @@ mod tests {
         let authority = Pubkey::new_from_array([1; 32]);
         let freeze = Pubkey::new_from_array([2; 32]);
         let mint = test.add(
-            Mint::new()
+            Mint::account()
                 .with_authority(authority)
                 .with_freeze_authority(freeze),
         );
@@ -533,7 +533,7 @@ mod tests {
             .is_err());
 
         // Installed as a wallet, the same transfer goes through.
-        test.add(Wallet::new().at(payer));
+        test.add(Wallet::account().at(payer));
         test.send(system_transfer(payer, recipient, amount))
             .succeeds()
             .has_lamports(recipient, amount);
@@ -577,7 +577,7 @@ mod tests {
         let recipient = Pubkey::new_from_array([2; 32]);
         let cosigner = Pubkey::new_from_array([3; 32]);
         let amount = 1_000_000_000;
-        test.add(Wallet::new().at(payer));
+        test.add(Wallet::account().at(payer));
 
         let mut transfer = system_transfer(payer, recipient, amount);
         transfer
@@ -587,6 +587,65 @@ mod tests {
         test.send(transfer)
             .succeeds()
             .has_lamports(cosigner, DEFAULT_WALLET_LAMPORTS);
+    }
+
+    /// A named protocol invariant: `account` never holds more than `max`
+    /// lamports. Guards on presence, the realistic shape — an invariant only
+    /// judges accounts the checked transaction touched.
+    struct Capped {
+        account: Pubkey,
+        max: u64,
+    }
+
+    impl Check for Capped {
+        fn check(&self, outcome: &Outcome) {
+            if let Some(account) = outcome.account(self.account) {
+                assert!(
+                    account.lamports <= self.max,
+                    "cap exceeded for {}: {} lamports",
+                    self.account,
+                    account.lamports
+                );
+            }
+        }
+    }
+
+    // A registered invariant is verified after every committed send — the
+    // second transfer pushes the recipient past the cap and the *send itself*
+    // fails, with no assertion written at the call site.
+    #[test]
+    #[should_panic(expected = "cap exceeded")]
+    fn invariants_run_after_every_send() {
+        let mut test = empty_test();
+        let payer = Pubkey::new_from_array([1; 32]);
+        let recipient = Pubkey::new_from_array([2; 32]);
+        test.add(Wallet::account().at(payer));
+        test.invariant(Capped {
+            account: recipient,
+            max: 1_500_000_000,
+        });
+
+        test.send(system_transfer(payer, recipient, 1_000_000_000))
+            .succeeds();
+        // The invariant panics inside this send, before its outcome exists.
+        let _ = test.send(system_transfer(payer, recipient, 1_000_000_000));
+    }
+
+    // Simulations commit nothing, so invariants do not judge them: the same
+    // over-cap transfer that fails as a send passes as a simulation.
+    #[test]
+    fn invariants_ignore_simulations() {
+        let mut test = empty_test();
+        let payer = Pubkey::new_from_array([1; 32]);
+        let recipient = Pubkey::new_from_array([2; 32]);
+        test.add(Wallet::account().at(payer));
+        test.invariant(Capped {
+            account: recipient,
+            max: 1,
+        });
+
+        test.simulate(system_transfer(payer, recipient, 1_000_000_000))
+            .succeeds();
     }
 
     // Micro-benchmarks for the harness hot paths. These are `#[ignore]` so they
@@ -614,11 +673,11 @@ mod tests {
         fn bench_world_setup_with_fixtures() {
             report("world_setup_16_fixtures", 2_000, || {
                 let mut test = empty_test();
-                let authority = test.add(Wallet::new());
-                let mint = test.add(Mint::new().with_authority(authority).supply(1_000));
+                let authority = test.add(Wallet::account());
+                let mint = test.add(Mint::account().with_authority(authority).supply(1_000));
                 for _ in 0..14 {
-                    let holder = test.add(Wallet::new());
-                    test.add(TokenAccount::new(mint, holder).amount(10));
+                    let holder = test.add(Wallet::account());
+                    test.add(TokenAccount::account(mint, holder).amount(10));
                 }
                 std::hint::black_box(&test);
             });
@@ -628,7 +687,7 @@ mod tests {
         #[ignore = "benchmark"]
         fn bench_send_round_trip() {
             let mut test = empty_test();
-            let payer = test.add(Wallet::new().fund(u64::MAX));
+            let payer = test.add(Wallet::account().fund(u64::MAX));
             let recipient = Pubkey::new_from_array([9; 32]);
             report("send_round_trip", 5_000, || {
                 std::hint::black_box(test.send(system_transfer(payer, recipient, 1)).is_ok());

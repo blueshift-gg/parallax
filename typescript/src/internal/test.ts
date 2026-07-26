@@ -100,6 +100,7 @@ export class TestCore<Address, Account, Instruction, Output> {
   readonly #primaryProgramId: Address | undefined;
   readonly #rpc: string;
   readonly #projectDir: string;
+  readonly #invariants: ((outcome: Output) => void)[] = [];
 
   protected constructor(
     adapter: HarnessAdapter<Address, Account, Instruction, Output>,
@@ -465,6 +466,20 @@ export class TestCore<Address, Account, Instruction, Output> {
 
   // --- Execution ------------------------------------------------------------
 
+  /**
+   * Register a check — or an array of them — verified after every committed
+   * send. Define a protocol invariant once and every `send` in the test
+   * enforces it; the outcome an invariant sees is the same one the test
+   * asserts on. Invariants also run when the send itself fails (a failed
+   * transaction commits nothing), and never on simulations. Mirrors Rust
+   * `Test::invariant`.
+   */
+  invariant(
+    check: ((outcome: Output) => void) | readonly ((outcome: Output) => void)[],
+  ): void {
+    this.#invariants.push(...(Array.isArray(check) ? check : [check]));
+  }
+
   send(instruction: Instruction): Output {
     return this.#execute([instruction], [], true);
   }
@@ -569,7 +584,11 @@ export class TestCore<Address, Account, Instruction, Output> {
               this.#adapter.buildAccount(change.after)),
         ),
     );
-    return this.#adapter.outcome(result, accounts, changes);
+    const outcome = this.#adapter.outcome(result, accounts, changes);
+    if (commit) {
+      for (const invariant of this.#invariants) invariant(outcome);
+    }
+    return outcome;
   }
 
   #requiredAccount(address: Address): Account {
