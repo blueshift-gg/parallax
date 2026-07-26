@@ -3,7 +3,7 @@
 <!-- Logo drops in here once one exists: <p align="center"><img width="380" alt="Parallax" src="..." /></p> -->
 
 <p align="center">
-  <b>Fixture-based testing for Solana programs — one test model, three languages, the real runtime.</b>
+  <b>A fixture-based testing harness for <a href="https://github.com/LiteSVM/litesvm">LiteSVM</a>.</b>
 </p>
 
 <p align="center">
@@ -15,12 +15,11 @@
   -->
 </p>
 
-Parallax makes an on-chain program test read like an ordinary test: name your
-actors, install fixtures, send an instruction, assert on a structured outcome.
-The same model runs from Rust, [Kit](https://github.com/anza-xyz/kit), and
-Web3.js — over [LiteSVM](https://github.com/LiteSVM/litesvm) and the real Agave
-runtime — so a contract verified in Rust behaves identically when a TypeScript
-client drives it. That forced agreement is the name: one program, three vantages.
+Parallax makes an on-chain program test read like an ordinary test: install
+fixtures, send an instruction, assert on the outcome. The same test model is
+available from Rust, [Kit](https://github.com/anza-xyz/kit), and Web3.js, backed
+by a single Rust implementation, so a program tested in Rust behaves identically
+when a TypeScript client drives it.
 
 ## Quickstart
 
@@ -49,23 +48,23 @@ compiled program into an isolated `Test` world — the program id defaults to
 
 ## Why Parallax
 
-- **The real runtime, not a mock.** Rent, ownership, account rules, and signature
-  logic are enforced exactly as on mainnet — the Agave runtime under LiteSVM.
-- **One model, three languages.** Rust, Kit, and Web3.js share member names and
-  **byte-identical, deterministic worlds** — a fixture address one computes
-  matches the others', so tests port by construction.
-- **Fast.** ~5 µs per `send` through the Rust core, ~6.5 µs through the
-  TypeScript kernel, ~180 ns for a typed-state read. ([numbers](#performance))
-- **Spoofed signers, zero fees.** Name any address as a signer without a keypair;
-  no fees are charged, so a balance only ever moves because a program moved it.
-- **Mainnet state in two lines.** Dump real accounts or programs from a live
-  cluster — the first run fetches, every later run is offline and deterministic.
-- **Framework-agnostic.** Typed state is [wincode](https://docs.rs/wincode)- and
-  codec-based, so any Solana program's accounts decode — no framework lock-in.
+- **Real runtime.** LiteSVM runs the Agave runtime, so rent, ownership, and
+  account rules behave like mainnet.
+- **One implementation, three languages.** The Rust, Kit, and Web3.js harnesses
+  share the same names, the same semantics, and deterministic worlds.
+- **Fast.** ~5 µs per `send` in Rust, ~6.5 µs from TypeScript, ~180 ns for a
+  typed read. ([numbers](#performance))
+- **Spoofed signers, zero fees.** Any address can sign without a keypair, and
+  balances only move when a program moves them.
+- **Mainnet state in two lines.** Dump accounts or programs once; every later
+  run is offline and deterministic.
+- **No framework lock-in.** Typed state goes through
+  [wincode](https://docs.rs/wincode) schemas and plain codecs, so any Solana
+  program's accounts decode.
 
 ## The same test, both languages
 
-The parity is the point — one deposit test, in Rust and in TypeScript.
+One deposit test, in Rust and in TypeScript.
 
 ```rust,ignore
 // Rust
@@ -206,15 +205,6 @@ Measured with `cargo test --release -- --ignored --nocapture bench_` and
 
 The TypeScript shell adds ~1.5 µs of FFI + wire tax over the core; a Web3.js send
 is faster still, skipping the base58 round-trip a Kit `Address` pays.
-
-## Relationship to LiteSVM and Mollusk
-
-Parallax is a **harness**, not an engine.
-[LiteSVM](https://github.com/LiteSVM/litesvm) executes the transactions; Parallax
-is the fixture, assertion, and cross-language layer that makes a test read like a
-test. [Mollusk](https://github.com/anza-xyz/mollusk) is an alternative engine in
-the same space; Parallax sits above either, drives LiteSVM today, and keeps the
-backend private so the public test API can outlast the engine beneath it.
 
 ## Documentation
 
