@@ -116,19 +116,25 @@ Any `.parallax/` file is a shareable dump artifact `load` reads by path.
 Assertions throw with actionable messages and chain (`return this`); reads return
 plain values or `null`:
 
+The verdict is a method; every other assertion is a **check value** passed to
+`check`, mirroring Rust — one grammar, arrays group facts:
+
 ```ts
+import { Changes, CuBudget, Lamports, Owner, State, Supply, Tokens } from "parallax-svm/kit";
+
 test
   .send(withdraw)
   .succeeds()                                  // or: .fails({ type: "InsufficientFunds" })
-  .cuAtMost(20_000n)                           //     .failsWith(6001)  — custom code
-  .hasLamports(recipient, 1_000_000n)
-  .hasTokens(vault, 600n)
-  .hasSupply(mint, 1_000n)
-  .hasState(VaultCodec, vault, s => assert.equal(s.amount, 600n))
-  .ownedBy(vault, test.programId)
-  .hasData(registry, [1, 0, 0, 0])             // exact raw bytes
-  .returns(expectedReturnData)
-  .isClosed(tempAccount);
+  .check([                                     //     .failsWith(6001)  — custom code
+    CuBudget.le(20_000n),
+    Lamports.eq(recipient, 1_000_000n),
+    Tokens.eq(vault, 600n),
+    Supply.eq(mint, 1_000n),
+    Owner.eq(vault, test.programId),
+    Changes.eq([user, vault]),                 // the exact changed set, in order
+    Changes.created(vault),
+    State.eq(VaultCodec, vault, { authority, amount: 600n }),
+  ]);
 
 const out = test.simulate(instruction);
 out.isOk();  out.isErr();  out.error;          // ProgramError | null
@@ -140,32 +146,32 @@ for (const change of out.accountChanges) {     // writable before/after
 }
 ```
 
-### Checks and invariants
+The fact namespaces mirror Rust exactly — `CuBudget`/`Lamports`/`Tokens`/
+`Supply` with `eq, le, lt, ge, gt`; `Owner.eq`, `Data.eq`, `ReturnData.eq`;
+`State.eq(codec, addr, value)` (deep equality) and `State.with(codec, addr, cb)`;
+`Changes.eq([..])`, `Changes.created`, `Changes.removed`, `Changes.closed`. In
+TypeScript a check is simply a function of the outcome.
 
-A `Check` is a reusable assertion — in TypeScript, simply a function of the
-outcome. `outcome.check(..)` runs one (or an array of them);
-`test.invariant(..)` registers one that runs after every committed send (never
-on simulations), so a protocol invariant is written once and enforced
-everywhere. Mirrors Rust's `Check` trait.
+### Custom checks and invariants
+
+Any `(outcome) => void` function is a check. `test.invariant(..)` registers one
+— built-in or custom — to run after every committed send (never on
+simulations), so a protocol invariant is written once and enforced everywhere:
 
 ```ts
-import { CuBudget, type Check } from "parallax-svm/kit";
+import { State, type Check } from "parallax-svm/kit";
 
-const solvent: Check = outcome =>
-  outcome.hasState(PoolCodec, pool, p => assert.ok(p.reserves >= p.obligations));
+const solvent: Check = State.with(PoolCodec, pool, p =>
+  assert.ok(p.reserves >= p.obligations),
+);
 
 test.invariant(solvent);                       // every send now enforces it
-test
-  .send(swap)
-  .succeeds()
-  .check([CuBudget.atMost(20_000n)])           // one-off checks, grouped freely
-  .check(outcome => assert.equal(outcome.logs.length, 3));
+test.send(swap).succeeds().check(outcome => assert.equal(outcome.logs.length, 3));
 ```
 
 An invariant sees each send's `Outcome`, so the accounts it judges must be part
 of that transaction; guard on `outcome.account(..)` returning `null` when an
-invariant only sometimes applies. `CuBudget.atMost(n)` is the check-shaped
-sibling of `cuAtMost` for compute budgets that travel as values.
+invariant only sometimes applies.
 
 `ProgramError` is a tagged union: `{ type: "InsufficientFunds" }`,
 `{ type: "Custom"; code }`, `{ type: "Runtime"; message }`, and the rest. Assert a
@@ -181,7 +187,7 @@ client's codec plugs straight in:
 interface AccountCodec<Value, Address> {
   decode(bytes: Uint8Array): Value;      // on the body (post-discriminator)
   encode?(value: Value): ArrayLike<number>;
-  owner?: Address;                        // validated by read/hasState
+  owner?: Address;                        // validated by read/State checks
   discriminator?: Uint8Array;             // stripped before decode, framed by write
   size?: number;                          // minimum raw length
 }
@@ -190,11 +196,11 @@ const vaultState = test.read(VaultCodec, vault);   // codec first, then address
 test.write(VaultCodec, vault, { authority, amount: 1_000n });
 ```
 
-`read`, `write`, and `Outcome.hasState` validate `owner`, `discriminator`, and
+`read`, `write`, and the `State` checks validate `owner`, `discriminator`, and
 `size` against the raw account before decoding, throwing precisely on any
 mismatch. This is the deliberate mirror of Rust: **TS codecs carry and validate
 `owner`** because generated bundles are self-framing, whereas Rust frames bytes
-only and keeps owner an orthogonal `owned_by` / `ownedBy` assertion — available
+only and keeps owner an orthogonal `Owner::eq` / `Owner.eq` check — available
 standalone here too.
 
 `deriveAta(owner, mint, tokenProgram?)` (defaulting `tokenProgram` to `"legacy"`),

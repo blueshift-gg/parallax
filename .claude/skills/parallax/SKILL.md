@@ -24,8 +24,7 @@ fn deposits(test: &mut Test) {
 
     test.send(DepositInstruction { user, amount: 1_000_000_000 })
         .succeeds()
-        .cu_at_most(10_000)
-        .has_lamports(vault, 1_000_000_000);
+        .check([CuBudget::le(10_000), Lamports::eq(vault, 1_000_000_000)]);
 }
 ```
 
@@ -42,7 +41,7 @@ using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/my_program.so");
 const user = await test.add(wallet());
 test.send(await client.createDepositInstruction({ user, amount: 1_000_000_000n }))
     .succeeds()
-    .cuAtMost(10_000n);
+    .check(CuBudget.le(10_000n));
 ```
 
 The native kernel resolves from the installed platform package, or set
@@ -88,28 +87,33 @@ Chain off `send`/`simulate` — an unasserted `Outcome` is a compile error in
 Rust. `send` commits, `simulate` never does; `…_all` variants run an atomic
 instruction chain, `…_with` variants take raw transaction-input accounts.
 
+**The verdict is a method; every fact is a check value.** One grammar:
+
 ```rust
 test.send(withdraw)
     .succeeds()                          // .fails(ProgramError::…) / .fails_with(MyError::Code)
-    .cu_at_most(20_000)
-    .has_lamports(addr, n).has_tokens(addr, n).has_supply(mint, n)
-    .has_state::<Vault>(addr, |v| assert_eq!(v.amount, 600))
-    .has_data(addr, &bytes).returns(&bytes)
-    .owned_by(addr, program).is_closed(addr);
+    .check([
+        CuBudget::le(20_000),            // eq/le/lt/ge/gt on all numeric facts
+        Lamports::eq(addr, n), Tokens::eq(addr, n), Supply::eq(mint, n),
+        Owner::eq(addr, program),
+        Data::eq(addr, bytes), ReturnData::eq(bytes),
+        Changes::eq([user, vault]),      // exact changed set, in order
+        Changes::created(vault),         // and removed(a) / closed(a)
+    ])
+    .check(State::eq(vault, Vault { authority, amount: 600 }));  // typed, T inferred
 ```
 
-Reads (not asserts): `account(addr)`, `accounts()`, `logs()`, `return_value()`,
-`compute_units()`, `events(decode)`, `account_changes()` with `was_created()` /
-`was_removed()`.
+TS mirrors every namespace (`CuBudget.le`, `Lamports.eq`, `State.eq(codec, addr, value)`,
+`Changes.eq([..])`). `State::with::<T>(addr, |s| ..)` asserts partial facts.
 
-**Checks are values.** For a reusable or protocol-wide assertion, implement
-`Check` (TS: any `(outcome) => void` function) and either chain it once with
-`.check(..)` or register it with `test.invariant(..)` to run after every
-committed send:
+Reads (not asserts): `account(addr)`, `accounts()`, `logs()`, `return_value()`,
+`compute_units()`, `events(decode)`, `account_changes()`.
+
+**Invariants.** Register any check — built-in, closure, or your own `Check`
+struct — to run after every committed send (never on simulations):
 
 ```rust
-test.invariant(Solvent { pool });            // struct implementing Check
-outcome.check([CuBudget::at_most(10_000)]);  // closures, arrays, tuples all work
+test.invariant(Solvent { pool });        // enforced on every send from here on
 ```
 
 ## Typed state
@@ -121,7 +125,7 @@ let s = test.read::<MyState>(addr);             // decode full account data
 
 Rust types derive wincode schemas; generated client account types frame their
 own discriminator. TS uses generated `{Name}Account` codec bundles:
-`test.read(VaultAccount, addr)` / `outcome.hasState(VaultAccount, addr, cb)`.
+`test.read(VaultAccount, addr)` / `State.with(VaultAccount, addr, cb)`.
 
 ## Semantics you must not fight
 
@@ -150,6 +154,7 @@ own discriminator. TS uses generated `{Name}Account` codec bundles:
 | account not found after send | You installed an init target — remove the fixture, let the program create it |
 | wrong-type `read` panic (non-zero trailing bytes) | You read the wrong type for that account |
 | invariant panic on an unrelated send | The invariant asserts an account absent from that transaction — guard on `outcome.account(..)` presence |
+| `outcome does not contain account …` | The checked account is not in the transaction — add it to the instruction or read world state via `test` |
 | TS: cannot find native library | Set `PARALLAX_SVM_LIB` or install the platform package |
 
 Failure output includes program logs and, in dump worlds, a hint naming the

@@ -24,8 +24,8 @@ import {
   type TokenAccountOptions as SharedTokenAccountOptions,
   type WalletOptions as SharedWalletOptions,
 } from "./internal/fixture.js";
+import { createChecks } from "./internal/check.js";
 import {
-  CuBudget,
   Outcome as SharedOutcome,
   type AccountChange as SharedAccountChange,
   type AccountCodec as SharedAccountCodec,
@@ -43,7 +43,7 @@ import {
   type TestOptions as SharedTestOptions,
 } from "./internal/test.js";
 
-export { CuBudget, DEFAULT_WALLET_LAMPORTS, TokenProgram };
+export { DEFAULT_WALLET_LAMPORTS, TokenProgram };
 export type { ProgramError } from "./internal/outcome.js";
 export type { AssociatedTokenAccountOptions };
 
@@ -148,6 +148,10 @@ const adapter: HarnessAdapter<
   lamports: account => account.accountInfo.lamports,
   renderAddress: value => value.toBase58(),
 };
+
+/** The built-in fact namespaces for `check([..])` and `invariant(..)`. */
+export const { CuBudget, Lamports, Tokens, Supply, Owner, Data, ReturnData, State, Changes } =
+  createChecks(adapter);
 
 /** An isolated fixture-first test world using Web3.js address and account types. */
 export class Test extends TestCore<

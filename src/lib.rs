@@ -57,7 +57,9 @@ mod world;
 pub use dump::DumpPlan;
 
 pub use {
-    check::{Check, CuBudget},
+    check::{
+        Assert, Changes, Check, CuBudget, Data, Lamports, Owner, ReturnData, State, Supply, Tokens,
+    },
     outcome::Outcome,
     parallax_svm_derive::parallax_test,
     setup::{SetupError, TestBuilder, PROGRAM_PATH_ENV},
@@ -102,8 +104,9 @@ pub mod prelude {
             AssociatedTokenAccount, Dump, Fixture, Load, Mint, Program, TokenAccount, TokenProgram,
             Wallet,
         },
-        parallax_test, system_program, Account, AccountChange, AccountMeta, Check, CuBudget,
-        Instruction, Outcome, ProgramError, Pubkey, Snapshot, Test, DEFAULT_WALLET_LAMPORTS,
+        parallax_test, system_program, Account, AccountChange, AccountMeta, Assert, Changes, Check,
+        CuBudget, Data, Instruction, Lamports, Outcome, Owner, ProgramError, Pubkey, ReturnData,
+        Snapshot, State, Supply, Test, Tokens, DEFAULT_WALLET_LAMPORTS,
         SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
     };
 }
@@ -116,8 +119,9 @@ mod tests {
             co_signers,
             fixture::{AssociatedTokenAccount, Fixture, Mint, TokenAccount, TokenProgram, Wallet},
             setup::resolve_program_path_from_named,
-            system_program, Account, AccountMeta, Check, Instruction, Outcome, ProgramError,
-            Pubkey, SetupError, Test, DEFAULT_WALLET_LAMPORTS, SPL_TOKEN_2022_PROGRAM_ID,
+            system_program, Account, AccountMeta, Changes, Check, Instruction, Lamports, Outcome,
+            ProgramError, Pubkey, SetupError, Test, DEFAULT_WALLET_LAMPORTS,
+            SPL_TOKEN_2022_PROGRAM_ID,
         },
         spl_token::solana_program::program_option::COption,
         std::{fs, path::PathBuf},
@@ -536,7 +540,11 @@ mod tests {
         test.add(Wallet::account().at(payer));
         test.send(system_transfer(payer, recipient, amount))
             .succeeds()
-            .has_lamports(recipient, amount);
+            .check([
+                Lamports::eq(recipient, amount),
+                Changes::eq([payer, recipient]),
+                Changes::created(recipient),
+            ]);
     }
 
     // `simulate_with` seeds explicit transaction inputs like `send_with`, but
@@ -586,7 +594,7 @@ mod tests {
 
         test.send(transfer)
             .succeeds()
-            .has_lamports(cosigner, DEFAULT_WALLET_LAMPORTS);
+            .check(Lamports::eq(cosigner, DEFAULT_WALLET_LAMPORTS));
     }
 
     /// A named protocol invariant: `account` never holds more than `max`

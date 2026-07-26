@@ -49,7 +49,7 @@ export interface OutcomeAdapter<Address, Account> {
  *
  * `decode`/`encode` operate on the account body — the bytes *after* the
  * discriminator when one is present. The harness owns the framing metadata:
- * `read`/`hasState` validate `owner`, `discriminator`, and `size` against the
+ * `read` and the `State` checks validate `owner`, `discriminator`, and `size` against the
  * raw account before handing the stripped body to `decode`, and `write` frames
  * an encoded body with the discriminator. This mirrors the Rust `read`/`write`
  * semantics and pairs directly with a generated client's `XCodec`,
@@ -60,7 +60,7 @@ export interface AccountCodec<Value, Address> {
   decode(bytes: Uint8Array): Value;
   /** Encode a typed value into the account body, for `write`. */
   encode?(value: Value): ArrayLike<number>;
-  /** Program expected to own the account; validated by `read`/`hasState`. */
+  /** Program expected to own the account; validated by `read` and `State`. */
   owner?: Address;
   /** Leading discriminator bytes; validated and stripped before `decode`. */
   discriminator?: Uint8Array;
@@ -78,39 +78,13 @@ export type Check<Address, Account> = (
   outcome: Outcome<Address, Account>,
 ) => void;
 
-/**
- * A compute-unit budget as a check value: the check-shaped sibling of
- * `cuAtMost`, for budgets that are passed around, grouped with other checks,
- * or registered as invariants. Mirrors Rust `CuBudget`.
- */
-export const CuBudget = {
-  /** Budget an inclusive compute-unit ceiling. */
-  atMost(limit: bigint | number): Check<unknown, unknown> {
-    const ceiling = BigInt(limit);
-    return outcome => {
-      if (outcome.computeUnits > ceiling) {
-        throw new Error(
-          `CU budget exceeded: expected at most ${ceiling}, consumed ${outcome.computeUnits}`,
-        );
-      }
-    };
-  },
-};
-
 function describeBytes(bytes: Uint8Array): string {
   return `[${Array.from(bytes).join(", ")}]`;
 }
 
-function bytesEqual(actual: Uint8Array, expected: ArrayLike<number>): boolean {
-  return (
-    actual.length === expected.length &&
-    actual.every((byte, index) => byte === expected[index])
-  );
-}
-
 /**
  * Validate a raw account against a codec's framing metadata and decode its
- * body. Shared by `Test.read` and `Outcome.hasState`; throws with a precise
+ * body. Shared by `Test.read` and the `State` checks; throws with a precise
  * message on any owner, discriminator, or size mismatch.
  */
 export function decodeAccount<Value, Address, Account>(
@@ -252,40 +226,6 @@ export class Outcome<Address, Account> {
     return this;
   }
 
-  /** Assert the transaction's exact return data. */
-  returns(expected: Uint8Array | readonly number[]): this {
-    if (!bytesEqual(this.returnData, expected)) {
-      throw new Error(
-        `unexpected return data: expected ${describeBytes(Uint8Array.from(expected))}, got ${describeBytes(this.returnData)}${this.formattedLogs()}`,
-      );
-    }
-    return this;
-  }
-
-  /**
-   * Assert a resulting account's exact raw data bytes: the raw sibling of
-   * `hasState`, for fixed byte images and accounts without a codec.
-   */
-  hasData(address: Address, expected: Uint8Array | readonly number[]): this {
-    const data = this.adapter.accountData(this.requiredAccount(address));
-    if (!bytesEqual(data, expected)) {
-      throw new Error(
-        `unexpected account data for ${this.adapter.renderAddress(address)}: expected ${describeBytes(Uint8Array.from(expected))}, got ${describeBytes(data)}`,
-      );
-    }
-    return this;
-  }
-
-  cuAtMost(limit: bigint | number): this {
-    const ceiling = BigInt(limit);
-    if (this.computeUnits > ceiling) {
-      throw new Error(
-        `expected at most ${ceiling} compute units, consumed ${this.computeUnits}`,
-      );
-    }
-    return this;
-  }
-
   account(address: Address): Account | null {
     return this.#accounts.get(this.adapter.addressKey(address)) ?? null;
   }
@@ -308,47 +248,6 @@ export class Outcome<Address, Account> {
     return account === null ? null : decode(this.adapter.accountData(account));
   }
 
-  /**
-   * Decode a resulting account through a typed codec and run assertions against
-   * it. Validates owner, discriminator, and size like `Test.read`, throwing on
-   * mismatch; the closure asserts on the decoded state. Chainable.
-   *
-   * The codec's optional `owner` is validated here because generated bundles
-   * are self-framing — the deliberate mirror of Rust, where `has_state` decodes
-   * without checking ownership and pairs with an orthogonal `owned_by`. Use the
-   * standalone `ownedBy` when you want that same owner-only assertion in TS.
-   */
-  hasState<Value>(
-    codec: AccountCodec<Value, Address>,
-    address: Address,
-    check: (state: Value) => void,
-  ): this {
-    const account = this.account(address);
-    if (account === null) {
-      throw new Error(
-        `outcome does not contain account ${this.adapter.renderAddress(address)}`,
-      );
-    }
-    check(decodeAccount(codec, address, account, this.adapter));
-    return this;
-  }
-
-  /**
-   * Assert a resulting account is owned by `program`. Orthogonal to `hasState`,
-   * which decodes through the codec (and, when the codec carries `owner`, also
-   * validates ownership). Mirrors Rust `Outcome::owned_by`. Chainable.
-   */
-  ownedBy(address: Address, program: Address): this {
-    const account = this.requiredAccount(address);
-    const owner = this.adapter.accountOwner(account);
-    if (this.adapter.addressKey(owner) !== this.adapter.addressKey(program)) {
-      throw new Error(
-        `account ${this.adapter.renderAddress(address)} is owned by ${this.adapter.renderAddress(owner)}, expected ${this.adapter.renderAddress(program)}`,
-      );
-    }
-    return this;
-  }
-
   returnValue<Value>(decode: (data: Uint8Array) => Value | null): Value | null {
     return decode(this.returnData);
   }
@@ -367,69 +266,6 @@ export class Outcome<Address, Account> {
       }
     }
     return values;
-  }
-
-  hasLamports(address: Address, expected: bigint): this {
-    return this.expectAccountValue(
-      "lamport balance",
-      address,
-      expected,
-      account => this.adapter.lamports(account),
-    );
-  }
-
-  hasTokens(address: Address, expected: bigint): this {
-    return this.expectAccountValue(
-      "token balance",
-      address,
-      expected,
-      account => this.adapter.tokenAmount(account),
-    );
-  }
-
-  hasSupply(address: Address, expected: bigint): this {
-    return this.expectAccountValue(
-      "mint supply",
-      address,
-      expected,
-      account => this.adapter.mintSupply(account),
-    );
-  }
-
-  isClosed(address: Address): this {
-    const account = this.account(address);
-    if (account !== null && !this.adapter.isClosed(account)) {
-      throw new Error(
-        `account ${this.adapter.renderAddress(address)} is not closed`,
-      );
-    }
-    return this;
-  }
-
-  private expectAccountValue(
-    label: string,
-    address: Address,
-    expected: bigint,
-    read: (account: Account) => bigint,
-  ): this {
-    const account = this.requiredAccount(address);
-    const actual = read(account);
-    if (actual !== expected) {
-      throw new Error(
-        `unexpected ${label} for ${this.adapter.renderAddress(address)}: expected ${expected}, got ${actual}`,
-      );
-    }
-    return this;
-  }
-
-  private requiredAccount(address: Address): Account {
-    const account = this.account(address);
-    if (account === null) {
-      throw new Error(
-        `outcome does not contain account ${this.adapter.renderAddress(address)}`,
-      );
-    }
-    return account;
   }
 
   private formattedLogs(): string {

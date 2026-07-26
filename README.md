@@ -38,7 +38,7 @@ fn deposits_into_the_vault(test: &mut Test) {
 
     test.send(DepositInstruction { authority, amount: 1_000_000_000 })
         .succeeds()
-        .cu_at_most(10_000);
+        .check(CuBudget::le(10_000));
 }
 ```
 
@@ -74,7 +74,7 @@ fn deposits(test: &mut Test) {
 
     test.send(DepositInstruction { user, amount: 1_000 })
         .succeeds()
-        .has_tokens(vault_of(user), 1_000);
+        .check(Tokens::eq(vault_of(user), 1_000));
 }
 ```
 
@@ -87,7 +87,7 @@ using test = await Test.open(PROGRAM_ADDRESS, "target/deploy/vault.so");
 const user = await test.add(wallet());
 const deposit = await new VaultClient().createDepositInstruction({ user, amount: 1_000n });
 
-test.send(deposit).succeeds().hasTokens(vaultOf(user), 1_000n);
+test.send(deposit).succeeds().check(Tokens.eq(vaultOf(user), 1_000n));
 ```
 
 `parallax-svm/kit` and `parallax-svm/web3.js` are thin shells over the same Rust
@@ -132,20 +132,24 @@ test.send(SwapInstruction { pool, oracle }).succeeds();
 ### Outcomes
 
 Every execution returns a `#[must_use]` `Outcome` of stable, backend-neutral
-data. Assertions chain and panic with address-naming messages; reads return plain
-values.
+data. The verdict is a method; every fact is a check value, and one array
+asserts the whole world — checks panic with address-naming messages, reads
+return plain values.
 
 ```rust,ignore
-let out = test.send(withdraw);
-out.succeeds()
-   .has_lamports(recipient, 1_000_000)   // or: .fails_with(VaultError::Unauthorized)
-   .has_tokens(vault, 600)
-   .owned_by(vault, test.program_id());
-
-for change in out.account_changes() {     // writable before/after, first-appearance order
-    if change.was_created() { /* newly initialized this transaction */ }
-}
+test.send(withdraw)
+    .succeeds()                            // or: .fails_with(VaultError::Unauthorized)
+    .check([
+        Lamports::eq(recipient, 1_000_000),
+        Tokens::eq(vault, 600),
+        Owner::eq(vault, program_id),
+        Changes::eq([recipient, vault]),   // the exact changed set, in order
+    ]);
 ```
+
+`test.invariant(check)` registers any check — built-in or your own `Check`
+struct — to run after every send, so a protocol invariant is written once and
+enforced everywhere.
 
 `send` commits, `simulate` does not; each has an `_all` (chain) and a `_with` (raw
 inputs) variant. Full surface in the [reference](docs/rust_reference.md#outcomes).
@@ -162,8 +166,9 @@ let state = test.read::<VaultState>(vault);   // Snapshot<T>, derefs to T
 assert_eq!(state.amount, 1_000);
 ```
 
-`has_state::<T>(addr, check)` asserts on decoded state inline. The trailing-bytes
-rule and the Rust/TS owner asymmetry are in the
+`State::eq(addr, value)` asserts full decoded state; `State::with::<T>(addr, ..)`
+asserts partial facts. The trailing-bytes rule and the Rust/TS owner asymmetry
+are in the
 [reference](docs/rust_reference.md#typed-state-is-wincode-native).
 
 ### Adversarial testing

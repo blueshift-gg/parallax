@@ -1,7 +1,6 @@
 use {
     crate::{backend::ExecutionResult, Account, AccountChange, ProgramError, Pubkey},
     base64::{engine::general_purpose::STANDARD, Engine as _},
-    wincode::{config::DefaultConfig, SchemaRead},
 };
 
 pub(crate) struct TrackedAccount {
@@ -191,132 +190,14 @@ impl Outcome {
 
     /// Run a reusable [`Check`](crate::Check) against this outcome. Chainable.
     ///
-    /// Accepts a check struct, a closure, or an array or tuple of checks:
-    /// `outcome.check([CuBudget::at_most(10_000)])`. For a check verified after
-    /// *every* committed send, register it once with
-    /// [`Test::invariant`](crate::Test::invariant) instead.
+    /// Accepts a built-in fact (`check([CuBudget::le(5_000), Lamports::eq(vault, n)])`),
+    /// a struct implementing [`Check`](crate::Check), a closure, or an array
+    /// or tuple of checks. For a check verified after *every* committed send,
+    /// register it once with [`Test::invariant`](crate::Test::invariant)
+    /// instead.
     pub fn check(&self, check: impl crate::Check) -> &Self {
         check.check(self);
         self
-    }
-
-    /// Assert the transaction's exact return data.
-    pub fn returns(&self, expected: &[u8]) -> &Self {
-        assert_eq!(
-            self.return_data,
-            expected,
-            "unexpected return data{}",
-            self.formatted_logs()
-        );
-        self
-    }
-
-    /// Assert a resulting account's exact raw data bytes.
-    ///
-    /// The raw sibling of [`Self::has_state`], for fixed byte images and
-    /// accounts without a typed schema.
-    pub fn has_data(&self, address: Pubkey, expected: &[u8]) -> &Self {
-        assert_eq!(
-            self.required_account(address).data,
-            expected,
-            "unexpected account data for {address}"
-        );
-        self
-    }
-
-    /// Assert an inclusive compute-unit ceiling. The check-value equivalent is
-    /// [`CuBudget::at_most`](crate::CuBudget::at_most), which this delegates to.
-    pub fn cu_at_most(&self, limit: u64) -> &Self {
-        self.check(crate::CuBudget::at_most(limit))
-    }
-
-    /// Assert a resulting lamport balance.
-    pub fn has_lamports(&self, address: Pubkey, expected: u64) -> &Self {
-        assert_eq!(
-            self.required_account(address).lamports,
-            expected,
-            "unexpected lamport balance for {address}"
-        );
-        self
-    }
-
-    /// Assert a resulting Token or Token-2022 account balance.
-    pub fn has_tokens(&self, address: Pubkey, expected: u64) -> &Self {
-        assert_eq!(
-            token_amount(self.required_account(address)),
-            expected,
-            "unexpected token balance for {address}"
-        );
-        self
-    }
-
-    /// Assert a resulting Token or Token-2022 mint supply.
-    pub fn has_supply(&self, address: Pubkey, expected: u64) -> &Self {
-        assert_eq!(
-            mint_supply(self.required_account(address)),
-            expected,
-            "unexpected mint supply for {address}"
-        );
-        self
-    }
-
-    /// Assert typed post-state at `address`, passing the decoded value to
-    /// `check` for user assertions.
-    ///
-    /// The account's data is decoded through `T`'s wincode schema, the same
-    /// decode path as [`Test::read`](crate::Test::read). Panics with the
-    /// address and the wincode error when the account is absent or its bytes do
-    /// not decode. Ownership is intentionally not checked here — pair with
-    /// [`Self::owned_by`] when that matters. This differs from the TypeScript
-    /// harness by design: TS codecs carry and validate `owner` because generated
-    /// bundles are self-framing; in Rust owner stays an orthogonal `owned_by`
-    /// assertion. Chainable, so several accounts can be asserted in one
-    /// expression.
-    pub fn has_state<T>(&self, address: Pubkey, check: impl FnOnce(&T)) -> &Self
-    where
-        T: for<'de> SchemaRead<'de, DefaultConfig, Dst = T>,
-    {
-        let name = core::any::type_name::<T>();
-        let account = self.account(address).unwrap_or_else(|| {
-            panic!("has_state {name}: outcome does not contain account {address}")
-        });
-        let state = crate::world::decode::<T>("has_state", address, &account.data, 0);
-        check(&state);
-        self
-    }
-
-    /// Assert a resulting account is owned by `program`.
-    ///
-    /// Orthogonal to [`Self::has_state`], which decodes without checking
-    /// ownership. Chainable.
-    pub fn owned_by(&self, address: Pubkey, program: Pubkey) -> &Self {
-        let account = self.required_account(address);
-        assert_eq!(
-            account.owner, program,
-            "account {address} is owned by {}, expected {program}",
-            account.owner
-        );
-        self
-    }
-
-    /// Assert Solana's closed-account state. A runtime may remove the account
-    /// entirely or retain its empty system-owned representation.
-    pub fn is_closed(&self, address: Pubkey) -> &Self {
-        if let Some(account) = self.account(address) {
-            assert_eq!(account.lamports, 0, "closed account still holds lamports");
-            assert!(account.data.is_empty(), "closed account still holds data");
-            assert_eq!(
-                account.owner,
-                crate::system_program::ID,
-                "closed account is not system-owned"
-            );
-        }
-        self
-    }
-
-    fn required_account(&self, address: Pubkey) -> &Account {
-        self.account(address)
-            .unwrap_or_else(|| panic!("outcome does not contain account {address}"))
     }
 
     fn formatted_logs(&self) -> String {
@@ -361,7 +242,10 @@ pub(crate) fn mint_supply(account: &Account) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::CuBudget};
+    use {
+        super::*,
+        crate::{Changes, CuBudget, Data, Lamports, Owner, ReturnData, State},
+    };
 
     fn outcome(logs: &[&str], compute_units: u64) -> Outcome {
         Outcome {
@@ -394,44 +278,52 @@ mod tests {
         assert_eq!(outcome.return_value(|bytes| Some(bytes[1])), Some(8));
     }
 
+    // Every comparator holds and rejects with its own boundary.
     #[test]
-    fn compute_unit_ceiling_is_inclusive() {
-        outcome(&[], 10).cu_at_most(10);
+    fn cu_comparators_cover_their_boundaries() {
+        let ten = outcome(&[], 10);
+        ten.check([
+            CuBudget::eq(10),
+            CuBudget::le(10),
+            CuBudget::lt(11),
+            CuBudget::ge(10),
+            CuBudget::gt(9),
+        ]);
     }
 
     #[test]
-    fn returns_asserts_exact_return_data() {
-        outcome(&[], 0).returns(&[9, 8, 7]);
+    #[should_panic(expected = "compute units: expected <= 9, consumed 10")]
+    fn cu_le_rejects_over_budget() {
+        outcome(&[], 10).check(CuBudget::le(9));
+    }
+
+    #[test]
+    fn return_data_asserts_exact_bytes() {
+        outcome(&[], 0).check(ReturnData::eq([9, 8, 7]));
     }
 
     #[test]
     #[should_panic(expected = "unexpected return data")]
-    fn returns_rejects_different_bytes() {
-        outcome(&[], 0).returns(&[9, 8]);
+    fn return_data_rejects_different_bytes() {
+        outcome(&[], 0).check(ReturnData::eq([9, 8]));
     }
 
-    // A check value runs through `check` in every accepted shape: a struct
-    // (`CuBudget`), a closure, and an array grouping several.
+    // A check value runs through `check` in every accepted shape: built-in
+    // facts, a closure, and an array grouping several.
     #[test]
-    fn check_accepts_structs_closures_and_arrays() {
+    fn check_accepts_facts_closures_and_arrays() {
         let ran = core::cell::Cell::new(false);
         outcome(&[], 10)
-            .check(CuBudget::at_most(10))
+            .check(CuBudget::eq(10))
             .check(|o: &Outcome| assert_eq!(o.compute_units(), 10))
-            .check([CuBudget::at_most(10), CuBudget::at_most(11)])
+            .check([CuBudget::le(10), CuBudget::le(11)])
             .check(|_: &Outcome| ran.set(true));
         assert!(ran.get(), "closure checks must run");
     }
 
-    #[test]
-    #[should_panic(expected = "CU budget exceeded")]
-    fn check_surfaces_a_failing_budget() {
-        outcome(&[], 10).check(CuBudget::at_most(9));
-    }
-
     // A minimal wincode account type: a discriminator-free struct whose schema
-    // covers the whole account, enough to exercise the typed `has_state` and
-    // `owned_by` paths without a program.
+    // covers the whole account, enough to exercise the typed `State` and
+    // `Owner` checks without a program.
     #[derive(wincode::SchemaRead, wincode::SchemaWrite, Clone, PartialEq, Debug)]
     struct Counter {
         count: u64,
@@ -456,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn has_state_decodes_and_checks_typed_post_state() {
+    fn state_checks_decode_typed_post_state() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
         let outcome = state_outcome(counter_account(
@@ -465,51 +357,79 @@ mod tests {
             &Counter { count: 7, tag: 3 },
         ));
 
-        let mut checked = false;
-        outcome
-            .has_state::<Counter>(address, |value| {
-                assert_eq!(value.count, 7);
-                assert_eq!(value.tag, 3);
-                checked = true;
-            })
-            .cu_at_most(0);
-        assert!(checked, "the check closure should run against the state");
+        outcome.check([
+            State::eq(address, Counter { count: 7, tag: 3 }),
+            State::with::<Counter>(address, |value| assert_eq!(value.count, 7)),
+        ]);
     }
 
     #[test]
-    #[should_panic(expected = "has_state")]
-    fn has_state_panics_when_bytes_do_not_decode() {
+    #[should_panic(expected = "did not decode")]
+    fn state_checks_panic_when_bytes_do_not_decode() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
         // Too few bytes for a Counter (needs nine), so the wincode decode fails.
         let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
 
-        outcome.has_state::<Counter>(address, |_| {
+        outcome.check(State::with::<Counter>(address, |_| {
             unreachable!("the decode fails before the check runs")
-        });
+        }));
     }
 
     #[test]
-    fn has_data_asserts_exact_raw_bytes() {
+    fn lamports_comparators_read_the_resulting_account() {
+        let address = Pubkey::new_from_array([5; 32]);
+        let owner = Pubkey::new_from_array([9; 32]);
+        let outcome = state_outcome(Account::new(address, owner, 42, Vec::new()));
+
+        outcome.check([Lamports::eq(address, 42), Lamports::ge(address, 40)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "outcome does not contain account")]
+    fn account_facts_name_a_missing_account() {
+        let missing = Pubkey::new_from_array([8; 32]);
+        outcome(&[], 0).check(Lamports::eq(missing, 1));
+    }
+
+    #[test]
+    fn changes_facts_read_the_change_set() {
+        let address = Pubkey::new_from_array([5; 32]);
+        let owner = Pubkey::new_from_array([9; 32]);
+        let created = Account::new(address, owner, 42, Vec::new());
+        let mut outcome = state_outcome(created.clone());
+        outcome.changes = vec![crate::AccountChange::new(address, None, Some(created))];
+
+        outcome.check([Changes::eq([address]), Changes::created(address)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "did not change account")]
+    fn changes_facts_name_an_untouched_account() {
+        outcome(&[], 0).check(Changes::created(Pubkey::new_from_array([8; 32])));
+    }
+
+    #[test]
+    fn data_check_asserts_exact_raw_bytes() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
         let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
 
-        outcome.has_data(address, &[1, 2, 3]);
+        outcome.check(Data::eq(address, [1, 2, 3]));
     }
 
     #[test]
     #[should_panic(expected = "unexpected account data")]
-    fn has_data_rejects_different_bytes() {
+    fn data_check_rejects_different_bytes() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
         let outcome = state_outcome(Account::new(address, owner, 42, vec![1, 2, 3]));
 
-        outcome.has_data(address, &[1, 2]);
+        outcome.check(Data::eq(address, [1, 2]));
     }
 
     #[test]
-    fn owned_by_asserts_account_ownership() {
+    fn owner_check_asserts_account_ownership() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
         let outcome = state_outcome(counter_account(
@@ -518,14 +438,15 @@ mod tests {
             &Counter { count: 1, tag: 0 },
         ));
 
-        outcome
-            .owned_by(address, owner)
-            .has_state::<Counter>(address, |value| assert_eq!(value.count, 1));
+        outcome.check((
+            Owner::eq(address, owner),
+            State::with::<Counter>(address, |value| assert_eq!(value.count, 1)),
+        ));
     }
 
     #[test]
     #[should_panic(expected = "owned by")]
-    fn owned_by_rejects_the_wrong_owner() {
+    fn owner_check_rejects_the_wrong_owner() {
         let address = Pubkey::new_from_array([5; 32]);
         let owner = Pubkey::new_from_array([9; 32]);
         let foreign = Pubkey::new_from_array([1; 32]);
@@ -535,6 +456,6 @@ mod tests {
             &Counter { count: 1, tag: 0 },
         ));
 
-        outcome.owned_by(address, foreign);
+        outcome.check(Owner::eq(address, foreign));
     }
 }

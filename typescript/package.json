@@ -55,7 +55,7 @@
     "parallax-svm-win32-x64-msvc": "0.1.0"
   },
   "peerDependencies": {
-    "@solana/web3.js": "^3.0.0"
+    "@solana/web3.js": "^3.0.0-rc.2"
   },
   "peerDependenciesMeta": {
     "@solana/web3.js": {

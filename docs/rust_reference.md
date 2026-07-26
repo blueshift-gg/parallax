@@ -177,48 +177,67 @@ assert on it — and it holds only stable, backend-neutral data. Assertions pani
 with actionable messages (and are chainable, returning `&Self`); reads return
 plain values or `Option`.
 
+The verdict is a method; every other assertion is a **check value** passed to
+`check` — one grammar, and a plain array groups heterogeneous facts:
+
 ```rust,ignore
 test.send(withdraw)
     .succeeds()                                   // or: .fails(ProgramError::InsufficientFunds)
-    .cu_at_most(20_000)                           //     .fails_with(VaultError::Unauthorized)
-    .has_lamports(recipient, 1_000_000)
-    .has_tokens(vault, 600)
-    .has_supply(mint, 1_000)
-    .has_state::<VaultState>(vault, |v| assert_eq!(v.amount, 600))
-    .owned_by(vault, test.program_id())
-    .has_data(registry, &[1, 0, 0, 0])            // exact raw bytes
-    .returns(&expected_return_data)
-    .is_closed(temp_account);
+    .check([                                      //     .fails_with(VaultError::Unauthorized)
+        CuBudget::le(20_000),
+        Lamports::eq(recipient, 1_000_000),
+        Tokens::eq(vault, 600),
+        Supply::eq(mint, 1_000),
+        Owner::eq(vault, program_id),
+        Changes::eq([user, vault]),               // the exact changed set, in order
+        Changes::created(vault),
+    ])
+    .check(State::eq(vault, VaultState { authority, amount: 600 }));
 ```
 
-### Checks and invariants
+The fact namespaces and their constructors:
 
-A `Check` is a reusable assertion value — the verification dual of a fixture.
-Structs implementing `Check`, closures, and arrays or tuples of checks all
-qualify. `outcome.check(..)` runs one; `test.invariant(..)` registers one that
-runs after every committed send (never on simulations), so a protocol invariant
-is written once and enforced everywhere:
+| Namespace | Constructors |
+| --- | --- |
+| `CuBudget` | `eq, le, lt, ge, gt (n)` |
+| `Lamports` / `Tokens` | `eq, le, lt, ge, gt (addr, n)` |
+| `Supply` | `eq, le, lt, ge, gt (mint, n)` |
+| `State` | `eq(addr, value)` — typed, `T` inferred; `with::<T>(addr, \|s\| ..)` for partial facts |
+| `Data` / `ReturnData` | `eq(addr, bytes)` / `eq(bytes)` |
+| `Owner` | `eq(addr, program)` |
+| `Changes` | `eq([addrs])`, `created(addr)`, `removed(addr)`, `closed(addr)` |
+
+Every constructor returns the same concrete `Assert` type, which is why a
+plain array works. `State::eq` decodes through the type's wincode schema and
+fails with the full decoded/expected pair; `Changes::closed` asserts Solana's
+closed-account state (removed entirely, or retained empty and system-owned).
+
+### Custom checks and invariants
+
+`Check` is the trait behind `check`: closures qualify, and structs implementing
+it give a protocol invariant a name. `test.invariant(..)` registers any check —
+built-in or custom — to run after every committed send (never on simulations),
+so an invariant is written once and enforced everywhere:
 
 ```rust,ignore
 struct Solvent { pool: Pubkey }
 
 impl Check for Solvent {
     fn check(&self, outcome: &Outcome) {
-        outcome.has_state::<Pool>(self.pool, |p| assert!(p.reserves >= p.obligations));
+        State::with::<Pool>(self.pool, |p| assert!(p.reserves >= p.obligations))
+            .check(outcome);
     }
 }
 
 test.invariant(Solvent { pool });                 // every send now enforces it
 test.send(swap)
     .succeeds()
-    .check([CuBudget::at_most(20_000)])           // one-off checks, grouped freely
     .check(|o: &Outcome| assert_eq!(o.logs().len(), 3));
 ```
 
 An invariant sees each send's `Outcome`, so the accounts it judges must be part
 of that transaction; guard on `outcome.account(..)` presence when an invariant
-only sometimes applies. `CuBudget::at_most(n)` is the check-shaped sibling of
-`cu_at_most` for compute budgets that travel as values.
+only sometimes applies.
 
 Reads pull structured data back out:
 
@@ -291,10 +310,10 @@ unconsumed tail must be **all zero** — Solana's zero-initialized reserved padd
 as a growable or migration-target account carries. A *non-zero* trailing byte is
 the fingerprint of the wrong or a stale type read against the account, and
 **panics** rather than silently returning a value decoded from a prefix. The same
-contract applies to `read_at`'s suffix and to `Outcome::has_state`.
+contract applies to `read_at`'s suffix and to the `State` checks.
 
 **Owner is orthogonal in Rust.** A wincode read frames bytes only and never
-checks the account's owner, so pair it with `owned_by` when ownership matters.
+checks the account's owner, so pair it with `Owner::eq` when ownership matters.
 This differs from TypeScript by design: there, codecs carry and validate `owner`
 because generated bundles are self-framing.
 

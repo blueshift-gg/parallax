@@ -182,7 +182,7 @@ impl Test {
     /// check the account's owner. This differs from the TypeScript harness by
     /// design: there, codecs carry and validate `owner` because generated
     /// bundles are self-framing; in Rust owner stays an orthogonal
-    /// [`Outcome::owned_by`](crate::Outcome::owned_by) assertion.
+    /// [`Owner::eq`](crate::Owner::eq) check.
     ///
     /// # Trailing bytes
     ///
@@ -255,7 +255,7 @@ impl Test {
     /// Note the asymmetry with [`Self::read`], which takes only an address:
     /// `owner` is required to *install* the account (every Solana account has
     /// one) but is never validated by a read. Pair a read with
-    /// [`Outcome::owned_by`](crate::Outcome::owned_by) when ownership matters.
+    /// [`Owner::eq`](crate::Owner::eq) when ownership matters.
     pub fn write<T>(&mut self, address: Pubkey, owner: Pubkey, value: T) -> Pubkey
     where
         T: SchemaWrite<DefaultConfig, Src = T>,
@@ -565,7 +565,7 @@ fn assert_unique_accounts(accounts: &[Account]) {
 }
 
 /// Decode `data` (from `offset`) as `T` via wincode's [`DefaultConfig`]. Shared
-/// by [`Test::read`], [`Test::read_at`], and [`crate::Outcome::has_state`] so
+/// by [`Test::read`], [`Test::read_at`], and the [`State`](crate::State) checks so
 /// every typed read takes the same decode path. `context` names the calling
 /// operation so panics stay actionable.
 ///
