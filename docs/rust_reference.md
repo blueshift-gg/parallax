@@ -98,6 +98,23 @@ let [m1, m2] = test.add(Mint::accounts().with_supply(1_000));
 function of owner and mint, so "several ATAs" only means several owners — which
 is exactly `Mint::with_holder`'s job.
 
+### Composition: tuples, holdings, closure worlds
+
+```rust,ignore
+let [mint_a, mint_b] = test.add(Mint::accounts());
+let (maker, taker) = test.add((
+    Wallet::account().holding(mint_a, 1_000_000_000),
+    Wallet::account().holding(mint_b, 1_000_000_000),
+));
+```
+
+Tuples install heterogeneous fixtures in order and destructure their handles;
+`holding` installs a funded associated token account inside the actor — the
+actor-centric dual of `with_holder`. Closures are fixtures too: a world is a
+plain function receiving `&mut Test`, and because it can call
+`test.invariant(..)` while it builds, `test.add(escrow_world(1_000))` yields a
+**self-verifying world** — names, state, and standing laws in one value.
+
 ### Application fixtures
 
 An application composes the built-ins behind its own `Fixture` for protocol

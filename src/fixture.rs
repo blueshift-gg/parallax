@@ -10,7 +10,7 @@ use {
 /// Applications can implement this trait for protocol-level fixtures and
 /// compose the built-in account fixtures inside [`Fixture::install`]. Arrays
 /// of one fixture type are fixtures too, so repeated setup can be installed
-/// with `test.add([Wallet::account(); 3])`. Each fixture returns the address it
+/// with `test.add((Wallet::account(), Wallet::account()))`. Each fixture returns the address it
 /// placed, so tests thread those handles instead of pinning addresses up front.
 pub trait Fixture {
     /// Handle or state returned after installation.
@@ -19,6 +19,44 @@ pub trait Fixture {
     /// Install the fixture and return the handles needed by the test.
     fn install(self, test: &mut Test) -> Self::Output;
 }
+
+/// Closures are fixtures: `|t: &mut Test| { ... }` installs by running, and
+/// its return value is the output — the dependency mechanism for worlds where
+/// later fixtures need earlier handles. A world function returns one:
+///
+/// ```rust,ignore
+/// fn escrow_world(funding: u64) -> impl Fixture<Output = EscrowWorld> {
+///     move |t: &mut Test| { /* add fixtures, register invariants */ }
+/// }
+/// ```
+impl<O, F: FnOnce(&mut Test) -> O> Fixture for F {
+    type Output = O;
+
+    fn install(self, test: &mut Test) -> O {
+        self(test)
+    }
+}
+
+macro_rules! impl_fixture_for_tuple {
+    ($($name:ident),+) => {
+        /// Tuples are fixtures: one `add` installs a heterogeneous world, in
+        /// order, and destructures its handles.
+        impl<$($name: Fixture),+> Fixture for ($($name,)+) {
+            type Output = ($($name::Output,)+);
+
+            fn install(self, test: &mut Test) -> Self::Output {
+                #[allow(non_snake_case)]
+                let ($($name,)+) = self;
+                ($($name.install(test),)+)
+            }
+        }
+    };
+}
+
+impl_fixture_for_tuple!(A, B);
+impl_fixture_for_tuple!(A, B, C);
+impl_fixture_for_tuple!(A, B, C, D);
+impl_fixture_for_tuple!(A, B, C, D, E);
 
 impl<F: Fixture, const N: usize> Fixture for [F; N] {
     type Output = [F::Output; N];
@@ -49,11 +87,15 @@ impl Fixture for Account {
     }
 }
 
-/// A system-owned, funded account.
-#[derive(Debug, Clone, Copy)]
+/// A system-owned, funded account, optionally holding token balances —
+/// `Wallet::account().holding(mint, 1_000)` installs the wallet and a funded
+/// associated token account per holding, the actor-centric dual of
+/// [`Mint::with_holder`].
+#[derive(Debug, Clone)]
 pub struct Wallet {
     address: Option<Pubkey>,
     lamports: u64,
+    holdings: Vec<(Pubkey, u64)>,
 }
 
 impl Wallet {
@@ -63,7 +105,15 @@ impl Wallet {
         Self {
             address: None,
             lamports: crate::DEFAULT_WALLET_LAMPORTS,
+            holdings: Vec::new(),
         }
+    }
+
+    /// Hold `amount` of `mint` through the wallet's associated token account,
+    /// installed alongside the wallet. Repeatable for several mints.
+    pub fn holding(mut self, mint: Pubkey, amount: u64) -> Self {
+        self.holdings.push((mint, amount));
+        self
     }
 
     /// Use a specific address instead of the world's next deterministic one.
@@ -82,9 +132,9 @@ impl Wallet {
     /// the plural of [`Wallet::account`], mirroring [`Dump::accounts`]:
     /// `let [alice, bob] = test.add(Wallet::accounts([ALICE, BOB]).fund(5_000))`.
     ///
-    /// Configure the shared balance on the returned builder; it applies to every
-    /// wallet. For `N` *fresh* wallets, `[Wallet::account().fund(7); N]` already
-    /// works ([`Wallet`] is `Copy`).
+    /// Configure the shared balance on the returned builder; it applies to
+    /// every wallet. Fresh wallets group in a tuple:
+    /// `test.add((Wallet::account(), Wallet::account()))`.
     pub fn accounts<const N: usize>(addresses: [Pubkey; N]) -> Wallets<N> {
         Wallets {
             addresses,
@@ -125,6 +175,14 @@ impl Fixture for Wallet {
     fn install(self, test: &mut Test) -> Self::Output {
         let address = self.address.unwrap_or_else(|| test.fresh_address());
         test.set_account(accounts::system_account(address, self.lamports));
+        for (mint, amount) in self.holdings {
+            test.set_account(accounts::associated_token_account_with_program(
+                address,
+                mint,
+                amount,
+                crate::SPL_TOKEN_PROGRAM_ID,
+            ));
+        }
         address
     }
 }

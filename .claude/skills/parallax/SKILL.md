@@ -65,8 +65,12 @@ account enters empty on purpose (see semantics below). Pick by what you need:
 | A CPI callee | `Program::new(id, elf)` | `program(id, elf)` |
 
 Every fixture returns its address(es) from `test.add` — thread the handles,
-never hardcode. Protocol fixtures are plain types implementing `Fixture`
-(`install(test)`), composing the built-ins.
+never hardcode. Composition is one algebra: tuples install heterogeneous
+worlds in one `add` (`let (maker, mint) = test.add((Wallet::account(),
+Mint::account()));`), `Wallet::account().holding(mint, n)` carries token
+balances inside the actor, and closures are fixtures — a protocol world is a
+plain function `|t: &mut Test| -> W` that adds fixtures, may register
+`t.invariant(..)` (a self-verifying world), and returns its handles.
 
 ## Mainnet state
 

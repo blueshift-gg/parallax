@@ -20,6 +20,12 @@ export type MintHolder<Address> = readonly [owner: Address, amount: bigint];
 
 export interface WalletOptions<Address> {
   address?: Address;
+  /**
+   * Token balances to hold through the wallet's associated token accounts,
+   * installed alongside it — `[mint, amount]` pairs. Mirrors Rust
+   * `Wallet::holding`.
+   */
+  holdings?: readonly (readonly [Address, bigint])[];
   /** Exact lamport balance, mirroring Rust `Wallet::fund`. Defaults to
    * `DEFAULT_WALLET_LAMPORTS`. */
   fund?: bigint;
@@ -203,7 +209,15 @@ export function createFixtureFactories<
           ),
       };
     }
-    return { install: test => test.installWallet(options.address, options.fund) };
+    return {
+      install: test => {
+        const address = test.installWallet(options.address, options.fund);
+        for (const [mint, amount] of options.holdings ?? []) {
+          test.installAta(mint, address, amount, TokenProgram.Legacy);
+        }
+        return address;
+      },
+    };
   }
 
   // `mint({ count: N })` installs N fresh mints sharing this config → Address[].

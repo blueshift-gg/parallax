@@ -239,7 +239,11 @@ mod tests {
     #[test]
     fn arrays_install_repeated_fixtures_without_helper_methods() {
         let mut test = empty_test();
-        let [alice, bob, carol] = test.add([Wallet::account().fund(7); 3]);
+        let (alice, bob, carol) = test.add((
+            Wallet::account().fund(7),
+            Wallet::account().fund(7),
+            Wallet::account().fund(7),
+        ));
 
         assert_eq!(test.lamports(alice), 7);
         assert_eq!(test.lamports(bob), 7);
@@ -639,6 +643,33 @@ mod tests {
 
         test.simulate(system_transfer(payer, recipient, 1_000_000_000))
             .succeeds();
+    }
+
+    // The composition algebra: tuples install heterogeneous worlds in order,
+    // closures are fixtures whose return value is the output, and a closure
+    // world can register its own invariants while it builds.
+    #[test]
+    fn tuples_and_closures_compose_worlds() {
+        let mut test = empty_test();
+
+        let ((maker, taker), mint) = test.add((
+            (Wallet::account(), Wallet::account()),
+            Mint::account().with_supply(1_000),
+        ));
+        assert_ne!(maker, taker);
+        assert_eq!(test.supply(mint), 1_000);
+
+        let world = test.add(|t: &mut Test| {
+            let holder = t.add(Wallet::account().holding(mint, 400));
+            t.invariant(CheckFn::new(move |tx| {
+                if let Some(account) = tx.account(holder) {
+                    assert!(account.lamports > 0, "holder drained");
+                }
+            }));
+            (holder, t.derive_ata(holder, mint, TokenProgram::Legacy))
+        });
+        assert_eq!(test.tokens(world.1), 400);
+        assert_eq!(test.lamports(world.0), DEFAULT_WALLET_LAMPORTS);
     }
 
     // Micro-benchmarks for the harness hot paths. These are `#[ignore]` so they
