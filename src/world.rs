@@ -182,7 +182,7 @@ impl Test {
     /// check the account's owner. This differs from the TypeScript harness by
     /// design: there, codecs carry and validate `owner` because generated
     /// bundles are self-framing; in Rust owner stays an orthogonal
-    /// [`Owner::eq`](crate::Owner::eq) check.
+    /// [`Account::owner`](crate::Account::owner) check.
     ///
     /// # Trailing bytes
     ///
@@ -255,7 +255,7 @@ impl Test {
     /// Note the asymmetry with [`Self::read`], which takes only an address:
     /// `owner` is required to *install* the account (every Solana account has
     /// one) but is never validated by a read. Pair a read with
-    /// [`Owner::eq`](crate::Owner::eq) when ownership matters.
+    /// [`Account::owner`](crate::Account::owner) when ownership matters.
     pub fn write<T>(&mut self, address: Pubkey, owner: Pubkey, value: T) -> Pubkey
     where
         T: SchemaWrite<DefaultConfig, Src = T>,
