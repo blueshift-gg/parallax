@@ -112,7 +112,7 @@ Tuples install heterogeneous fixtures in order and destructure their handles;
 `holding` installs a funded associated token account inside the actor — the
 actor-centric dual of `with_holder`. Closures are fixtures too: a world is a
 plain function receiving `&mut Ctx`, and because it can call
-`ctx.invariant(..)` while it builds, `ctx.add(escrow_world(1_000))` yields a
+`ctx.invariant(..)` while it builds, `ctx.add(escrow_setup(1_000))` yields a
 **self-verifying world** — names, state, and standing laws in one value.
 
 ### Application fixtures

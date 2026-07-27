@@ -25,7 +25,7 @@ pub trait Fixture {
 /// later fixtures need earlier handles. A world function returns one:
 ///
 /// ```rust,ignore
-/// fn escrow_world(funding: u64) -> impl Fixture<Output = EscrowWorld> {
+/// fn escrow_setup(funding: u64) -> impl Fixture<Output = EscrowSetup> {
 ///     move |t: &mut Ctx| { /* add fixtures, register invariants */ }
 /// }
 /// ```
