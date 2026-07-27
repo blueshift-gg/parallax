@@ -211,7 +211,10 @@ fn configured_program_path() -> Result<Option<PathBuf>, SetupError> {
     if path.is_file() {
         return Ok(Some(path));
     }
-    Err(SetupError::ConfiguredProgramMissing { path })
+    Err(SetupError::ConfiguredProgramMissing {
+        env: PROGRAM_PATH_ENV,
+        path,
+    })
 }
 
 pub(super) fn resolve_program_path_from_named(
@@ -256,9 +259,13 @@ pub(super) fn resolve_program_path_from_named(
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SetupError {
-    /// The path supplied through [`PROGRAM_PATH_ENV`] no longer exists.
+    /// A configured program path no longer exists.
     ConfiguredProgramMissing {
-        /// Missing path supplied through [`PROGRAM_PATH_ENV`].
+        /// The environment variable that supplied the path —
+        /// [`PROGRAM_PATH_ENV`] natively, or a downstream bridge's own
+        /// variable, so the diagnostic names the one the user actually set.
+        env: &'static str,
+        /// Missing path supplied through `env`.
         path: PathBuf,
     },
     /// The current working directory could not be read.
@@ -317,9 +324,9 @@ pub enum SetupError {
 impl fmt::Display for SetupError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfiguredProgramMissing { path } => write!(
+            Self::ConfiguredProgramMissing { env, path } => write!(
                 formatter,
-                "{PROGRAM_PATH_ENV} points to missing program artifact {}",
+                "{env} points to missing program artifact {}",
                 path.display()
             ),
             Self::CurrentDirectory(source) => {
